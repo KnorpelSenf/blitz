@@ -1,0 +1,14 @@
+[package]
+name = "blitz-js"
+version = "0.1.0"
+license.workspace = true
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# Blitz dependencies
+blitz-dom = { path = "../blitz-dom", default-features = false }
+blitz-traits = { path = "../blitz-traits" }
+wasm-bindgen = "0.2.81"

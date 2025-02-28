@@ -769,6 +769,7 @@ impl BaseDocument {
         node_id: usize,
         mut cb: impl FnMut(usize, &mut BaseDocument),
     ) {
+        cb(node_id, self);
         iter_subtree_mut_inner(self, node_id, &mut cb);
         fn iter_subtree_mut_inner(
             doc: &mut BaseDocument,
@@ -1074,7 +1075,7 @@ impl BaseDocument {
                 return Some(CursorIcon::Pointer);
             }
 
-            maybe_node = node.parent_node();
+            maybe_node = node.layout_parent.get().map(|node_id| node.with(node_id));
         }
 
         // Else fallback to default cursor

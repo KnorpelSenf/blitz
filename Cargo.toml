@@ -21,11 +21,11 @@ license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 # Servo dependencies
-style = { git = "https://github.com/KnorpelSenf/stylo", rev = "9b065dde5a8f5c0a10ae758d7cc347e855ffa81b", package = "style" }               # 2025-01-02
-style_config = { git = "https://github.com/KnorpelSenf/stylo", rev = "9b065dde5a8f5c0a10ae758d7cc347e855ffa81b", package = "style_config" } # 2025-01-02
-style_traits = { git = "https://github.com/KnorpelSenf/stylo", rev = "9b065dde5a8f5c0a10ae758d7cc347e855ffa81b", package = "style_traits" } # 2025-01-02
-style_dom = { git = "https://github.com/KnorpelSenf/stylo", rev = "9b065dde5a8f5c0a10ae758d7cc347e855ffa81b", package = "dom" }             # 2025-01-02
-selectors = { git = "https://github.com/KnorpelSenf/stylo", rev = "9b065dde5a8f5c0a10ae758d7cc347e855ffa81b", package = "selectors" }       # 2025-01-02
+style = { git = "https://github.com/KnorpelSenf/stylo", rev = "b80bff252df8b0c794c756ea4b46e664f7701356", package = "style" }               # 2025-02-28
+style_config = { git = "https://github.com/KnorpelSenf/stylo", rev = "b80bff252df8b0c794c756ea4b46e664f7701356", package = "style_config" } # 2025-02-28
+style_traits = { git = "https://github.com/KnorpelSenf/stylo", rev = "b80bff252df8b0c794c756ea4b46e664f7701356", package = "style_traits" } # 2025-02-28
+style_dom = { git = "https://github.com/KnorpelSenf/stylo", rev = "b80bff252df8b0c794c756ea4b46e664f7701356", package = "dom" }             # 2025-02-28
+selectors = { git = "https://github.com/KnorpelSenf/stylo", rev = "b80bff252df8b0c794c756ea4b46e664f7701356", package = "selectors" }       # 2025-02-28
 
 markup5ever = "0.14"      # needs to match stylo markup5ever version
 html5ever = "0.29"        # needs to match stylo markup5ever version
@@ -42,18 +42,12 @@ dioxus-core = { version = "0.6" }
 dioxus-html = { version = "0.6" }
 dioxus-cli-config = { version = "0.6" }
 dioxus-devtools = { version = "0.6" }
-taffy = { git = "https://github.com/dioxuslabs/taffy", rev = "51e21564", default-features = false, features = [
-  "std",
-  "flexbox",
-  "grid",
-  "block_layout",
-  "content_size",
-] }
+taffy = { git = "https://github.com/dioxuslabs/taffy", rev = "8437796c", default-features = false, features = ["std", "flexbox", "grid", "block_layout", "content_size", "calc"] }
 
 # Linebender + WGPU + SVG
 color = "0.2"
 peniko = "0.3"
-parley = { git = "https://github.com/linebender/parley", default-features = false, features = ["std"]}
+parley = "0.3"
 wgpu = "23"
 vello = { version = "0.4", features = ["wgpu"] }
 vello_svg = { version = "0.6" }

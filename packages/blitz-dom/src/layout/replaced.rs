@@ -8,6 +8,18 @@ pub struct ReplacedContext {
     pub attr_size: taffy::Size<Option<f32>>,
 }
 
+/// Whether a height/width value is violating it's min- and max- constraints
+/// The min- and max- constraints cannot both be violated because the max
+/// constraint if floored by the min constraint (min constraint takes priority)
+enum Violation {
+    /// Constraints are not violated
+    None,
+    /// Min constraint is violated
+    Min,
+    /// Max constraint is violated
+    Max,
+}
+
 pub fn replaced_measure_function(
     known_dimensions: taffy::Size<Option<f32>>,
     parent_size: taffy::Size<Option<f32>>,
@@ -84,19 +96,33 @@ pub fn replaced_measure_function(
             .map(|s| s.unwrap())
     };
 
+    // Floor size at zero
+    let size = unclamped_size.map(|s| s.max(0.0));
+
     // Violations
-    let w_min = unclamped_size.width < min_size.width.unwrap_or(0.0);
-    let w_max = unclamped_size.width > max_size.width.unwrap_or(f32::INFINITY);
-    let h_min = unclamped_size.height < min_size.height.unwrap_or(0.0);
-    let h_max = unclamped_size.height > max_size.height.unwrap_or(f32::INFINITY);
+    let width_violation = if size.width < min_size.width.unwrap_or(0.0) {
+        Violation::Min
+    } else if size.width > max_size.width.unwrap_or(f32::INFINITY) {
+        Violation::Max
+    } else {
+        Violation::None
+    };
+
+    let height_violation = if size.height < min_size.height.unwrap_or(0.0) {
+        Violation::Min
+    } else if size.height > max_size.height.unwrap_or(f32::INFINITY) {
+        Violation::Max
+    } else {
+        Violation::None
+    };
 
     // Clamp following rules in table at
     // https://www.w3.org/TR/CSS22/visudet.html#min-max-widths
-    let size = match (w_min, w_max, h_min, h_max) {
+    let size = match (width_violation, height_violation) {
         // No constraint violation
-        (false, false, false, false) => unclamped_size,
+        (Violation::None, Violation::None) => size,
         // w > max-width
-        (false, true, false, false) => {
+        (Violation::Max, Violation::None) => {
             let max_width = max_size.width.unwrap();
             Size {
                 width: max_width,
@@ -104,7 +130,7 @@ pub fn replaced_measure_function(
             }
         }
         // w < min-width
-        (true, false, false, false) => {
+        (Violation::Min, Violation::None) => {
             let min_width = min_size.width.unwrap();
             Size {
                 width: min_width,
@@ -112,7 +138,7 @@ pub fn replaced_measure_function(
             }
         }
         // h > max-height
-        (false, false, false, true) => {
+        (Violation::None, Violation::Max) => {
             let max_height = max_size.height.unwrap();
             Size {
                 width: (max_height * aspect_ratio).maybe_max(min_size.width),
@@ -120,7 +146,7 @@ pub fn replaced_measure_function(
             }
         }
         // h < min-height
-        (false, false, true, false) => {
+        (Violation::None, Violation::Min) => {
             let min_height = min_size.height.unwrap();
             Size {
                 width: (min_height * aspect_ratio).maybe_min(max_size.width),
@@ -128,10 +154,10 @@ pub fn replaced_measure_function(
             }
         }
         // (w > max-width) and (h > max-height)
-        (false, true, false, true) => {
+        (Violation::Max, Violation::Max) => {
             let max_width = max_size.width.unwrap();
             let max_height = max_size.height.unwrap();
-            if max_width / unclamped_size.width <= max_height / unclamped_size.height {
+            if max_width / size.width <= max_height / size.height {
                 Size {
                     width: max_width,
                     height: (max_width * inv_aspect_ratio).maybe_max(min_size.height),
@@ -144,10 +170,10 @@ pub fn replaced_measure_function(
             }
         }
         // (w < min-width) and (h < min-height)
-        (true, false, true, false) => {
+        (Violation::Min, Violation::Min) => {
             let min_width = min_size.width.unwrap();
             let min_height = min_size.height.unwrap();
-            if min_width / unclamped_size.width <= min_height / unclamped_size.height {
+            if min_width / size.width <= min_height / size.height {
                 Size {
                     width: (min_height * aspect_ratio).maybe_min(max_size.width),
                     height: min_height,
@@ -160,7 +186,7 @@ pub fn replaced_measure_function(
             }
         }
         // (w < min-width) and (h > max-height)
-        (true, false, false, true) => {
+        (Violation::Min, Violation::Max) => {
             let min_width = min_size.width.unwrap();
             let max_height = max_size.height.unwrap();
             Size {
@@ -169,7 +195,7 @@ pub fn replaced_measure_function(
             }
         }
         // (w < min-width) and (h > max-height)
-        (false, true, true, false) => {
+        (Violation::Max, Violation::Min) => {
             let max_width = max_size.width.unwrap();
             let min_height = min_size.height.unwrap();
             Size {
@@ -177,8 +203,6 @@ pub fn replaced_measure_function(
                 height: min_height,
             }
         }
-
-        _ => unreachable!("Max was already floored by min, so we cannot have both a min and a max violation in the same axis")
     };
 
     size + pb_sum

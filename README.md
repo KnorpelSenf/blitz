@@ -1,4 +1,20 @@
-# Blitz
+# FORK OF: Blitz
+
+This fork of a fork of blitz enables WASM support.
+
+Run the following commands to see it in action.
+You need to have wasm-pack and Deno installed for it.
+
+```sh
+cd packages/blitz-js
+wasm-pack build --debug --target deno
+deno check -I test.ts
+deno --allow-ffi --allow-read test.ts
+```
+
+Original README below.
+
+---
 
 **A [radically modular](https://github.com/DioxusLabs/blitz?tab=readme-ov-file#architecture) HTML/CSS rendering engine**
 

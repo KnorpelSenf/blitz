@@ -6,6 +6,12 @@ Run the following commands to see it in action.
 You need to have wasm-pack and Deno installed for it.
 
 ```sh
+# prep once
+curl -fsSL https://deno.land/install.sh | sh
+curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+```
+
+```sh
 cd packages/blitz-js
 wasm-pack build --debug --target deno
 deno check -I test.ts

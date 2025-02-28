@@ -47,7 +47,7 @@ taffy = { git = "https://github.com/dioxuslabs/taffy", rev = "8437796c", default
 # Linebender + WGPU + SVG
 color = "0.2"
 peniko = "0.3"
-parley = "0.3"
+parley = { git = "https://github.com/linebender/parley", default-features = false, features = ["std"]}
 wgpu = "23"
 vello = { version = "0.4", features = ["wgpu"] }
 vello_svg = { version = "0.6" }

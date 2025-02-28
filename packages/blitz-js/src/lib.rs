@@ -28,7 +28,7 @@ impl HasWindowHandle for WasmWindowHandle {
     fn window_handle(
         &self,
     ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
-        let raw = RawWindowHandle::Xlib(XlibWindowHandle::new(self.window_handle));
+        let raw = RawWindowHandle::Xlib(XlibWindowHandle::new(self.window_handle.into()));
         let handle = unsafe { WindowHandle::borrow_raw(raw) };
         Ok(handle)
     }

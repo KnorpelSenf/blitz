@@ -513,6 +513,9 @@ impl selectors::Element for BlitzNode<'_> {
 
             NonTSPseudoClass::InRange => false,
             NonTSPseudoClass::Modal => false,
+            NonTSPseudoClass::MozMeterOptimum => false,
+            NonTSPseudoClass::MozMeterSubOptimum => false,
+            NonTSPseudoClass::MozMeterSubSubOptimum => false,
             NonTSPseudoClass::Optional => false,
             NonTSPseudoClass::OutOfRange => false,
             NonTSPseudoClass::PopoverOpen => false,

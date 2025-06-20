@@ -1,21 +1,14 @@
-pub mod net;
-
+pub mod events;
 pub mod navigation;
-
-mod events;
-pub use events::{
-    BlitzImeEvent, BlitzKeyEvent, BlitzMouseButtonEvent, DomEvent, DomEventData, HitResult,
-    KeyState, MouseEventButton, MouseEventButtons,
-};
-
-mod document;
-pub use document::{BlitzWindowHandle, Document, DocumentRenderer};
+pub mod net;
+pub mod shell;
 
 mod devtools;
-pub use devtools::Devtools;
-
 mod viewport;
-pub use viewport::{ColorScheme, Viewport};
 
-mod wasm_send_sync;
-pub use wasm_send_sync::{WasmNotSend, WasmNotSendSync, WasmNotSync};
+pub use devtools::Devtools;
+pub use events::{
+    BlitzImeEvent, BlitzKeyEvent, BlitzMouseButtonEvent, DomEvent, DomEventData, EventState,
+    HitResult, KeyState, MouseEventButton, MouseEventButtons,
+};
+pub use viewport::{ColorScheme, Viewport};

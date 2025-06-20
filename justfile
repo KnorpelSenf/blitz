@@ -1,17 +1,23 @@
+check:
+  cargo check --workspace
+
 clippy:
-  cargo +nightly clippy --workspace
+  cargo clippy --workspace
 
 fmt:
   cargo fmt --all
 
-wpt target="css/css-flexbox css/css-grid css/css-align":
-  cargo run --release --package wpt {{target}}
+wpt *ARGS:
+  cargo run --release --package wpt {{ARGS}}
 
-screenshot target:
-  cargo run --release --example screenshot {{target}}
+screenshot *ARGS:
+  cargo run --release --example screenshot {{ARGS}}
 
-open target:
-  cargo run --release --package readme {{target}}
+open *ARGS:
+  cargo run --release --package readme {{ARGS}}
 
 todomvc:
   cargo run --release --example todomvc
+
+small:
+  cargo build --profile small -p counter --no-default-features --features cpu_backend,system_fonts

@@ -24,7 +24,7 @@ impl BaseDocument {
             println!("    {}: {}", attr.name.local, attr.value);
         }
 
-        if node.is_inline_root {
+        if node.flags.is_inline_root() {
             let inline_layout = &node
                 .data
                 .downcast_element()
@@ -74,13 +74,13 @@ impl BaseDocument {
         let layout = &node.final_layout;
         println!("Layout:");
         println!(
-                "  x: {x} y: {y} w: {width} h: {height} content_w: {content_width} content_h: {content_height}",
-                x = layout.location.x,
-                y = layout.location.y,
-                width = layout.size.width,
-                height = layout.size.height,
-                content_width = layout.content_size.width,
-                content_height = layout.content_size.height,
+            "  x: {x} y: {y} w: {width} h: {height} content_w: {content_width} content_h: {content_height}",
+            x = layout.location.x,
+            y = layout.location.y,
+            width = layout.size.width,
+            height = layout.size.height,
+            content_width = layout.content_size.width,
+            content_height = layout.content_size.height,
         );
         println!(
             "  border: l:{l} r:{r} t:{t} b:{b}",
@@ -111,7 +111,7 @@ impl BaseDocument {
             .map(|id| &self.nodes[*id])
             .map(|node| (node.id, node.order(), node.node_debug_str()))
             .collect();
-        println!("Children: {:?}", children);
+        println!("Children: {children:?}");
 
         println!("Layout Parent: {:?}", node.layout_parent.get());
 
@@ -122,7 +122,7 @@ impl BaseDocument {
                 .collect()
         });
         if let Some(layout_children) = layout_children {
-            println!("Layout Children: {:?}", layout_children);
+            println!("Layout Children: {layout_children:?}");
         }
 
         let paint_children: Option<Vec<_>> = node.paint_children.borrow().as_ref().map(|lc| {
@@ -132,7 +132,7 @@ impl BaseDocument {
                 .collect()
         });
         if let Some(paint_children) = paint_children {
-            println!("Paint Children: {:?}", paint_children);
+            println!("Paint Children: {paint_children:?}");
         }
         // taffy::print_tree(&self.dom, node_id.into());
     }

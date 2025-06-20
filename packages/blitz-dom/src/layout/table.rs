@@ -2,10 +2,10 @@ use std::{ops::Range, sync::Arc};
 
 use markup5ever::local_name;
 use style::computed_values::table_layout::T as TableLayout;
-use style::values::specified::box_::DisplayInside;
+use style::values::specified::box_::{DisplayInside, DisplayOutside};
 use taffy::{
-    compute_leaf_layout, style_helpers, Dimension, LayoutPartialTree as _,
-    NonRepeatedTrackSizingFunction, ResolveOrZero,
+    Dimension, LayoutPartialTree as _, NonRepeatedTrackSizingFunction, ResolveOrZero,
+    compute_leaf_layout, style_helpers,
 };
 
 use crate::BaseDocument;
@@ -114,6 +114,10 @@ pub(crate) fn collect_table_cells(
         return;
     };
 
+    if display.outside() == DisplayOutside::None {
+        return;
+    }
+
     match display.inside() {
         DisplayInside::TableRowGroup
         | DisplayInside::TableHeaderGroup
@@ -199,6 +203,7 @@ pub(crate) fn collect_table_cells(
                 start: style_helpers::line(*row as i16),
                 end: style_helpers::span(1),
             };
+            style.size.width = style_helpers::auto();
             cells.push(TableItem {
                 kind: TableItemKind::Cell,
                 node_id,
@@ -207,8 +212,14 @@ pub(crate) fn collect_table_cells(
 
             *col += colspan;
         }
+        DisplayInside::None => {
+            // Ignore
+        }
         _ => {
-            println!("Warning: ignoring non-table typed descendent of table");
+            println!(
+                "Warning: ignoring non-table typed descendent of table ({:?})",
+                display.inside()
+            );
         }
     }
 }

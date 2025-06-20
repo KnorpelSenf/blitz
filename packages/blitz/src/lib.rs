@@ -6,23 +6,22 @@
 //!  - `default`: Enables the features listed below.
 //!  - `accessibility`: Enables [`accesskit`] accessibility support.
 //!  - `hot-reload`: Enables hot-reloading of Dioxus RSX.
-//!  - `menu`: Enables the [`muda`] menubar.
 //!  - `tracing`: Enables tracing support.
 
 use std::sync::Arc;
 
+use anyrender_vello::VelloWindowRenderer as WindowRenderer;
 use blitz_html::HtmlDocument;
-use blitz_renderer_vello::BlitzVelloRenderer;
 use blitz_shell::{
-    create_default_event_loop, BlitzApplication, BlitzShellEvent, BlitzShellNetCallback, Config,
-    WindowConfig,
+    BlitzApplication, BlitzShellEvent, BlitzShellNetCallback, Config, WindowConfig,
+    create_default_event_loop,
 };
 use blitz_traits::navigation::DummyNavigationProvider;
 
 #[cfg(feature = "net")]
 pub fn launch_url(url: &str) {
     // Assert that url is valid
-    println!("{}", url);
+    println!("{url}");
     let url = url.to_owned();
     url::Url::parse(&url).expect("Invalid url");
 
@@ -49,15 +48,14 @@ pub fn launch_static_html(html: &str) {
 }
 
 pub fn launch_static_html_cfg(html: &str, cfg: Config) {
+    // Turn on the runtime and enter it
     #[cfg(feature = "net")]
-    {
-        // Turn on the runtime and enter it
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        let _guard = rt.enter();
-    }
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    #[cfg(feature = "net")]
+    let _guard = rt.enter();
 
     launch_internal(html, cfg)
 }
@@ -87,7 +85,8 @@ fn launch_internal(html: &str, cfg: Config) {
         None,
         navigation_provider,
     );
-    let window: WindowConfig<HtmlDocument, BlitzVelloRenderer> = WindowConfig::new(doc);
+    let renderer = WindowRenderer::new();
+    let window = WindowConfig::new(Box::new(doc) as _, renderer);
 
     // Create application
     let mut application = BlitzApplication::new(event_loop.create_proxy());

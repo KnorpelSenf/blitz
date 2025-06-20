@@ -4,17 +4,17 @@
 //! However, in Blitz, we do a style pass then a layout pass.
 //! This is slower, yes, but happens fast enough that it's not a huge issue.
 
-use crate::node::{ImageData, NodeData, NodeSpecificData};
+use crate::node::{ImageData, NodeData, SpecialElementData};
 use crate::{document::BaseDocument, node::Node};
 use markup5ever::local_name;
 use std::cell::Ref;
 use std::sync::Arc;
-use style::values::computed::length_percentage::CalcLengthPercentage;
 use style::values::computed::CSSPixelLength;
+use style::values::computed::length_percentage::CalcLengthPercentage;
 use taffy::{
-    compute_block_layout, compute_cached_layout, compute_flexbox_layout, compute_grid_layout,
-    compute_leaf_layout, prelude::*, CollapsibleMarginSet, FlexDirection, LayoutPartialTree,
-    NodeId, ResolveOrZero, RoundTree, Style, TraversePartialTree, TraverseTree,
+    CollapsibleMarginSet, FlexDirection, LayoutPartialTree, NodeId, ResolveOrZero, RoundTree,
+    Style, TraversePartialTree, TraverseTree, compute_block_layout, compute_cached_layout,
+    compute_flexbox_layout, compute_grid_layout, compute_leaf_layout, prelude::*,
 };
 
 pub(crate) mod construct;
@@ -22,12 +22,13 @@ pub(crate) mod inline;
 pub(crate) mod replaced;
 pub(crate) mod table;
 
-use self::replaced::{replaced_measure_function, ReplacedContext};
+use self::replaced::{ReplacedContext, replaced_measure_function};
 use self::table::TableTreeWrapper;
 
 pub(crate) fn resolve_calc_value(calc_ptr: *const (), parent_size: f32) -> f32 {
     let calc = unsafe { &*(calc_ptr as *const CalcLengthPercentage) };
-    calc.resolve(CSSPixelLength::new(parent_size)).px()
+    let result = calc.resolve(CSSPixelLength::new(parent_size));
+    result.px()
 }
 
 impl BaseDocument {
@@ -141,12 +142,6 @@ impl LayoutPartialTree for BaseDocument {
                     // })
                 }
                 NodeData::Element(element_data) | NodeData::AnonymousBlock(element_data) => {
-                    // Hide hidden nodes
-                    if let Some("hidden" | "") = element_data.attr(local_name!("hidden")) {
-                        node.style.display = Display::None;
-                        return taffy::LayoutOutput::HIDDEN;
-                    }
-
                     // TODO: deduplicate with single-line text input
                     if *element_data.name.local == *"textarea" {
                         let rows = element_data
@@ -216,6 +211,7 @@ impl LayoutPartialTree for BaseDocument {
                     }
 
                     if *element_data.name.local == *"img"
+                        || *element_data.name.local == *"canvas"
                         || (cfg!(feature = "svg") && *element_data.name.local == *"svg")
                     {
                         // Get width and height attributes on image element
@@ -231,12 +227,12 @@ impl LayoutPartialTree for BaseDocument {
                                 .and_then(|val| val.parse::<f32>().ok()),
                         };
 
-                        // Get image's native size
-                        let inherent_size = match &element_data.node_specific_data {
-                            NodeSpecificData::Image(image_data) => match &**image_data {
-                                ImageData::Raster(data) => taffy::Size {
-                                    width: data.image.width() as f32,
-                                    height: data.image.height() as f32,
+                        // Get image's native sizespecial_data
+                        let inherent_size = match &element_data.special_data {
+                            SpecialElementData::Image(image_data) => match &**image_data {
+                                ImageData::Raster(image) => taffy::Size {
+                                    width: image.width as f32,
+                                    height: image.height as f32,
                                 },
                                 #[cfg(feature = "svg")]
                                 ImageData::Svg(svg) => {
@@ -248,7 +244,8 @@ impl LayoutPartialTree for BaseDocument {
                                 }
                                 ImageData::None => taffy::Size::ZERO,
                             },
-                            NodeSpecificData::None => taffy::Size::ZERO,
+                            SpecialElementData::Canvas(_) => taffy::Size::ZERO,
+                            SpecialElementData::None => taffy::Size::ZERO,
                             _ => unreachable!(),
                         };
 
@@ -275,12 +272,12 @@ impl LayoutPartialTree for BaseDocument {
                         };
                     }
 
-                    if node.is_table_root {
-                        let NodeSpecificData::TableRoot(context) = &tree.nodes[node_id.into()]
+                    if node.flags.is_table_root() {
+                        let SpecialElementData::TableRoot(context) = &tree.nodes[node_id.into()]
                             .data
                             .downcast_element()
                             .unwrap()
-                            .node_specific_data
+                            .special_data
                         else {
                             panic!("Node marked as table root but doesn't have TableContext");
                         };
@@ -293,7 +290,7 @@ impl LayoutPartialTree for BaseDocument {
                         return compute_grid_layout(&mut table_wrapper, node_id, inputs);
                     }
 
-                    if node.is_inline_root {
+                    if node.flags.is_inline_root() {
                         return tree.compute_inline_layout(usize::from(node_id), inputs);
                     }
 

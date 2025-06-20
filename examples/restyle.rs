@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 
 fn main() {
     // Turn on the runtime and enter it
@@ -9,7 +9,7 @@ fn main() {
         .unwrap();
     let _guard = rt.enter();
 
-    dioxus_native::launch(app);
+    mini_dxn::launch(app);
 }
 
 #[derive(Copy, Clone)]

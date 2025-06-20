@@ -1,10 +1,15 @@
-use std::sync::Arc;
+use std::{
+    ops::{Deref, DerefMut},
+    sync::Arc,
+};
 
 use crate::DocumentHtmlParser;
 
-use blitz_dom::{net::Resource, BaseDocument, FontContext, DEFAULT_CSS};
+use blitz_dom::{
+    BaseDocument, DEFAULT_CSS, Document, EventDriver, FontContext, NoopEventHandler, net::Resource,
+};
 use blitz_traits::{
-    navigation::NavigationProvider, net::SharedProvider, ColorScheme, Document, DomEvent, Viewport,
+    ColorScheme, Viewport, events::UiEvent, navigation::NavigationProvider, net::SharedProvider,
 };
 
 pub struct HtmlDocument {
@@ -12,14 +17,14 @@ pub struct HtmlDocument {
 }
 
 // Implement DocumentLike and required traits for HtmlDocument
-
-impl AsRef<BaseDocument> for HtmlDocument {
-    fn as_ref(&self) -> &BaseDocument {
+impl Deref for HtmlDocument {
+    type Target = BaseDocument;
+    fn deref(&self) -> &BaseDocument {
         &self.inner
     }
 }
-impl AsMut<BaseDocument> for HtmlDocument {
-    fn as_mut(&mut self) -> &mut BaseDocument {
+impl DerefMut for HtmlDocument {
+    fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.inner
     }
 }
@@ -29,13 +34,17 @@ impl From<HtmlDocument> for BaseDocument {
     }
 }
 impl Document for HtmlDocument {
-    type Doc = BaseDocument;
-    fn handle_event(&mut self, event: &mut DomEvent) {
-        self.inner.as_mut().handle_event(event)
+    fn handle_event(&mut self, event: UiEvent) {
+        let mut driver = EventDriver::new(self.inner.mutate(), NoopEventHandler);
+        driver.handle_ui_event(event);
     }
 
     fn id(&self) -> usize {
         self.inner.id()
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
     }
 }
 
@@ -73,7 +82,7 @@ impl HtmlDocument {
         }
 
         // Parse HTML string into document
-        DocumentHtmlParser::parse_into_doc(&mut doc, html, net_provider);
+        DocumentHtmlParser::parse_into_doc(&mut doc, html);
 
         HtmlDocument { inner: doc }
     }

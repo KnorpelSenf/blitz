@@ -1,8 +1,8 @@
 use atomic_refcell::{AtomicRef, AtomicRefCell};
+use bitflags::bitflags;
 use color::{AlphaColor, Srgb};
-use image::DynamicImage;
 use keyboard_types::Modifiers;
-use markup5ever::{local_name, LocalName, QualName};
+use markup5ever::{LocalName, QualName, local_name};
 use parley::{Cluster, FontContext, LayoutContext};
 use peniko::kurbo;
 use selectors::matching::{ElementSelectorFlags, QuirksMode};
@@ -10,19 +10,19 @@ use slab::Slab;
 use std::cell::{Cell, RefCell};
 use std::fmt::Write;
 use std::str::FromStr;
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use style::Atom;
 use style::invalidation::element::restyle_hints::RestyleHint;
-use style::properties::generated::longhands::position::computed_value::T as Position;
 use style::properties::ComputedValues;
+use style::properties::generated::longhands::position::computed_value::T as Position;
 use style::selector_parser::PseudoElement;
 use style::stylesheets::UrlExtraData;
 use style::values::computed::Display;
 use style::values::specified::box_::{DisplayInside, DisplayOutside};
-use style::Atom;
 use style::{
-    data::ElementData,
-    properties::{parse_style_attribute, PropertyDeclarationBlock},
+    data::ElementData as StyloElementData,
+    properties::{PropertyDeclarationBlock, parse_style_attribute},
     servo_arc::Arc as ServoArc,
     shared_lock::{Locked, SharedRwLock},
     stylesheets::CssRuleType,
@@ -30,8 +30,8 @@ use style::{
 use style_dom::ElementState;
 use style_traits::values::ToCss;
 use taffy::{
-    prelude::{Layout, Style},
     Cache,
+    prelude::{Layout, Style},
 };
 use url::Url;
 
@@ -45,7 +45,31 @@ pub enum DisplayOuter {
     None,
 }
 
-// todo: might be faster to migrate this to ecs and split apart at a different boundary
+bitflags! {
+    pub struct NodeFlags: u32 {
+        const IS_INLINE_ROOT = 0b00000001;
+        const IS_TABLE_ROOT = 0b00000010;
+    }
+}
+
+impl NodeFlags {
+    #[inline(always)]
+    pub fn is_inline_root(&self) -> bool {
+        self.contains(Self::IS_INLINE_ROOT)
+    }
+
+    #[inline(always)]
+    pub fn is_table_root(&self) -> bool {
+        self.contains(Self::IS_TABLE_ROOT)
+    }
+
+    #[inline(always)]
+    pub fn reset_construction_flags(&mut self) {
+        self.remove(Self::IS_INLINE_ROOT);
+        self.remove(Self::IS_TABLE_ROOT);
+    }
+}
+
 pub struct Node {
     // The actual tree we belong to. This is unsafe!!
     tree: *mut Slab<Node>,
@@ -63,12 +87,15 @@ pub struct Node {
     /// The same as layout_children, but sorted by z-index
     pub paint_children: RefCell<Option<Vec<usize>>>,
 
+    // Flags
+    pub flags: NodeFlags,
+
     /// Node type (Element, TextNode, etc) specific data
     pub data: NodeData,
 
     // This little bundle of joy is our style data from stylo and a lock guard that allows access to it
     // TODO: See if guard can be hoisted to a higher level
-    pub stylo_element_data: AtomicRefCell<Option<ElementData>>,
+    pub stylo_element_data: AtomicRefCell<Option<StyloElementData>>,
     pub selector_flags: AtomicRefCell<ElementSelectorFlags>,
     pub guard: SharedRwLock,
     pub element_state: ElementState,
@@ -86,10 +113,6 @@ pub struct Node {
     pub unrounded_layout: Layout,
     pub final_layout: Layout,
     pub scroll_offset: kurbo::Point,
-
-    // Flags
-    pub is_inline_root: bool,
-    pub is_table_root: bool,
 }
 
 impl Node {
@@ -109,7 +132,9 @@ impl Node {
             layout_children: RefCell::new(None),
             paint_children: RefCell::new(None),
 
+            flags: NodeFlags::empty(),
             data,
+
             stylo_element_data: Default::default(),
             selector_flags: AtomicRefCell::new(ElementSelectorFlags::empty()),
             guard,
@@ -126,8 +151,6 @@ impl Node {
             unrounded_layout: Layout::new(),
             final_layout: Layout::new(),
             scroll_offset: kurbo::Point::ZERO,
-            is_inline_root: false,
-            is_table_root: false,
         }
     }
 
@@ -259,10 +282,10 @@ pub enum NodeData {
     Document,
 
     /// An element with attributes.
-    Element(ElementNodeData),
+    Element(ElementData),
 
     /// An anonymous block box
-    AnonymousBlock(ElementNodeData),
+    AnonymousBlock(ElementData),
 
     /// A text node.
     Text(TextNodeData),
@@ -280,7 +303,7 @@ pub enum NodeData {
 }
 
 impl NodeData {
-    pub fn downcast_element(&self) -> Option<&ElementNodeData> {
+    pub fn downcast_element(&self) -> Option<&ElementData> {
         match self {
             Self::Element(data) => Some(data),
             Self::AnonymousBlock(data) => Some(data),
@@ -288,7 +311,7 @@ impl NodeData {
         }
     }
 
-    pub fn downcast_element_mut(&mut self) -> Option<&mut ElementNodeData> {
+    pub fn downcast_element_mut(&mut self) -> Option<&mut ElementData> {
         match self {
             Self::Element(data) => Some(data),
             Self::AnonymousBlock(data) => Some(data),
@@ -309,6 +332,11 @@ impl NodeData {
 
     pub fn attr(&self, name: impl PartialEq<LocalName>) -> Option<&str> {
         self.downcast_element()?.attr(name)
+    }
+
+    pub fn has_attr(&self, name: impl PartialEq<LocalName>) -> bool {
+        self.downcast_element()
+            .is_some_and(|elem| elem.has_attr(name))
     }
 
     pub fn kind(&self) -> NodeKind {
@@ -337,7 +365,7 @@ pub struct Attribute {
 }
 
 #[derive(Debug, Clone)]
-pub struct ElementNodeData {
+pub struct ElementData {
     /// The elements tag name, namespace and prefix
     pub name: QualName,
 
@@ -358,15 +386,15 @@ pub struct ElementNodeData {
     ///   - The image data for \<img\> elements.
     ///   - The parley Layout for inline roots.
     ///   - The text editor for input/textarea elements
-    pub node_specific_data: NodeSpecificData,
+    pub special_data: SpecialElementData,
 
     pub background_images: Vec<Option<BackgroundImageData>>,
 
     /// Parley text layout (elements with inline inner display mode only)
     pub inline_layout_data: Option<Box<TextLayout>>,
 
-    //Data associated with display: list-item. Note that this display mode
-    // does not exclude inline_layout_data
+    /// Data associated with display: list-item. Note that this display mode
+    /// does not exclude inline_layout_data
     pub list_item_data: Option<Box<ListItemLayout>>,
 
     /// The element's template contents (\<template\> elements only)
@@ -375,7 +403,7 @@ pub struct ElementNodeData {
     // pub mathml_annotation_xml_integration_point: bool,
 }
 
-impl ElementNodeData {
+impl ElementData {
     pub fn new(name: QualName, attrs: Vec<Attribute>) -> Self {
         let id_attr_atom = attrs
             .iter()
@@ -383,7 +411,7 @@ impl ElementNodeData {
             .map(|attr| attr.value.as_ref())
             .map(|value: &str| Atom::from(value));
 
-        let mut data = ElementNodeData {
+        let mut data = ElementData {
             name,
             id: id_attr_atom,
             attrs,
@@ -391,7 +419,7 @@ impl ElementNodeData {
             style_attribute: Default::default(),
             inline_layout_data: None,
             list_item_data: None,
-            node_specific_data: NodeSpecificData::None,
+            special_data: SpecialElementData::None,
             template_contents: None,
             background_images: Vec::new(),
         };
@@ -413,16 +441,21 @@ impl ElementNodeData {
         attr.value.parse::<T>().ok()
     }
 
+    /// Detects the presence of the attribute, treating *any* value as truthy.
+    pub fn has_attr(&self, name: impl PartialEq<LocalName>) -> bool {
+        self.attrs.iter().any(|attr| name == attr.name.local)
+    }
+
     pub fn image_data(&self) -> Option<&ImageData> {
-        match &self.node_specific_data {
-            NodeSpecificData::Image(data) => Some(&**data),
+        match &self.special_data {
+            SpecialElementData::Image(data) => Some(&**data),
             _ => None,
         }
     }
 
     pub fn image_data_mut(&mut self) -> Option<&mut ImageData> {
-        match self.node_specific_data {
-            NodeSpecificData::Image(ref mut data) => Some(&mut **data),
+        match self.special_data {
+            SpecialElementData::Image(ref mut data) => Some(&mut **data),
             _ => None,
         }
     }
@@ -437,6 +470,13 @@ impl ElementNodeData {
     pub fn raster_image_data_mut(&mut self) -> Option<&mut RasterImageData> {
         match self.image_data_mut()? {
             ImageData::Raster(data) => Some(data),
+            _ => None,
+        }
+    }
+
+    pub fn canvas_data(&self) -> Option<&CanvasData> {
+        match &self.special_data {
+            SpecialElementData::Canvas(data) => Some(data),
             _ => None,
         }
     }
@@ -458,29 +498,29 @@ impl ElementNodeData {
     }
 
     pub fn text_input_data(&self) -> Option<&TextInputData> {
-        match &self.node_specific_data {
-            NodeSpecificData::TextInput(data) => Some(data),
+        match &self.special_data {
+            SpecialElementData::TextInput(data) => Some(data),
             _ => None,
         }
     }
 
     pub fn text_input_data_mut(&mut self) -> Option<&mut TextInputData> {
-        match &mut self.node_specific_data {
-            NodeSpecificData::TextInput(data) => Some(data),
+        match &mut self.special_data {
+            SpecialElementData::TextInput(data) => Some(data),
             _ => None,
         }
     }
 
     pub fn checkbox_input_checked(&self) -> Option<bool> {
-        match self.node_specific_data {
-            NodeSpecificData::CheckboxInput(checked) => Some(checked),
+        match self.special_data {
+            SpecialElementData::CheckboxInput(checked) => Some(checked),
             _ => None,
         }
     }
 
     pub fn checkbox_input_checked_mut(&mut self) -> Option<&mut bool> {
-        match self.node_specific_data {
-            NodeSpecificData::CheckboxInput(ref mut checked) => Some(checked),
+        match self.special_data {
+            SpecialElementData::CheckboxInput(ref mut checked) => Some(checked),
             _ => None,
         }
     }
@@ -516,13 +556,13 @@ impl ElementNodeData {
             }
     }
 
-    pub fn flush_style_attribute(&mut self, guard: &SharedRwLock) {
+    pub fn flush_style_attribute(&mut self, guard: &SharedRwLock, base_url: Option<Url>) {
         self.style_attribute = self.attr(local_name!("style")).map(|style_str| {
-            let url = UrlExtraData::from(
+            let url = UrlExtraData::from(base_url.clone().unwrap_or_else(|| {
                 "data:text/css;charset=utf-8;base64,"
                     .parse::<Url>()
-                    .unwrap(),
-            );
+                    .unwrap()
+            }));
 
             ServoArc::new(guard.wrap(parse_style_attribute(
                 style_str,
@@ -541,16 +581,19 @@ impl ElementNodeData {
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct RasterImageData {
-    /// The raw image data
-    pub image: Arc<DynamicImage>,
-    /// The resized image data (for the most recent size it's been displayed at)
-    pub resized_image: RefCell<Option<Arc<peniko::Image>>>,
+    /// The width of the image
+    pub width: u32,
+    /// The height of the image
+    pub height: u32,
+    /// The raw image data in RGBA8 format
+    pub data: Arc<Vec<u8>>,
 }
 impl RasterImageData {
-    pub fn new(image: Arc<DynamicImage>) -> Self {
+    pub fn new(width: u32, height: u32, data: Arc<Vec<u8>>) -> Self {
         Self {
-            image,
-            resized_image: RefCell::new(None),
+            width,
+            height,
+            data,
         }
     }
 }
@@ -559,18 +602,13 @@ impl RasterImageData {
 pub enum ImageData {
     Raster(RasterImageData),
     #[cfg(feature = "svg")]
-    Svg(usvg::Tree),
+    Svg(Box<usvg::Tree>),
     None,
-}
-impl From<Arc<DynamicImage>> for ImageData {
-    fn from(value: Arc<DynamicImage>) -> Self {
-        Self::Raster(RasterImageData::new(value))
-    }
 }
 #[cfg(feature = "svg")]
 impl From<usvg::Tree> for ImageData {
     fn from(value: usvg::Tree) -> Self {
-        Self::Svg(value)
+        Self::Svg(Box::new(value))
     }
 }
 
@@ -638,10 +676,12 @@ impl TextInputData {
 }
 
 /// Heterogeneous data that depends on the element's type.
-#[derive(Clone)]
-pub enum NodeSpecificData {
-    /// The element's image content (\<img\> element's only)
+#[derive(Clone, Default)]
+pub enum SpecialElementData {
+    /// An \<img\> element's image data
     Image(Box<ImageData>),
+    /// A \<canvas\> element's custom paint source
+    Canvas(CanvasData),
     /// Pre-computed table layout data
     TableRoot(Arc<TableContext>),
     /// Parley text editor (text inputs)
@@ -649,29 +689,30 @@ pub enum NodeSpecificData {
     /// Checkbox checked state
     CheckboxInput(bool),
     /// No data (for nodes that don't need any node-specific data)
+    #[default]
     None,
 }
 
-impl std::fmt::Debug for NodeSpecificData {
+#[derive(Debug, Clone)]
+pub struct CanvasData {
+    pub custom_paint_source_id: u64,
+}
+
+impl std::fmt::Debug for SpecialElementData {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            NodeSpecificData::Image(data) => match **data {
+            SpecialElementData::Image(data) => match **data {
                 ImageData::Raster(_) => f.write_str("NodeSpecificData::Image(Raster)"),
                 #[cfg(feature = "svg")]
                 ImageData::Svg(_) => f.write_str("NodeSpecificData::Image(Svg)"),
                 ImageData::None => f.write_str("NodeSpecificData::Image(None)"),
             },
-            NodeSpecificData::TableRoot(_) => f.write_str("NodeSpecificData::TableRoot"),
-            NodeSpecificData::TextInput(_) => f.write_str("NodeSpecificData::TextInput"),
-            NodeSpecificData::CheckboxInput(_) => f.write_str("NodeSpecificData::CheckboxInput"),
-            NodeSpecificData::None => f.write_str("NodeSpecificData::None"),
+            SpecialElementData::Canvas(_) => f.write_str("NodeSpecificData::Canvas"),
+            SpecialElementData::TableRoot(_) => f.write_str("NodeSpecificData::TableRoot"),
+            SpecialElementData::TextInput(_) => f.write_str("NodeSpecificData::TextInput"),
+            SpecialElementData::CheckboxInput(_) => f.write_str("NodeSpecificData::CheckboxInput"),
+            SpecialElementData::None => f.write_str("NodeSpecificData::None"),
         }
-    }
-}
-
-impl Default for NodeSpecificData {
-    fn default() -> Self {
-        Self::None
     }
 }
 
@@ -841,7 +882,7 @@ impl Node {
         matches!(self.data, NodeData::Text { .. })
     }
 
-    pub fn element_data(&self) -> Option<&ElementNodeData> {
+    pub fn element_data(&self) -> Option<&ElementData> {
         match self.data {
             NodeData::Element(ref data) => Some(data),
             NodeData::AnonymousBlock(ref data) => Some(data),
@@ -849,7 +890,7 @@ impl Node {
         }
     }
 
-    pub fn element_data_mut(&mut self) -> Option<&mut ElementNodeData> {
+    pub fn element_data_mut(&mut self) -> Option<&mut ElementData> {
         match self.data {
             NodeData::Element(ref mut data) => Some(data),
             NodeData::AnonymousBlock(ref mut data) => Some(data),
@@ -987,7 +1028,7 @@ impl Node {
         {
             Some(AtomicRef::map(
                 stylo_element_data,
-                |data: &Option<ElementData>| -> &ComputedValues {
+                |data: &Option<StyloElementData>| -> &ComputedValues {
                     data.as_ref().unwrap().styles.get_primary().unwrap()
                 },
             ))
@@ -1016,9 +1057,9 @@ impl Node {
         }
     }
 
-    pub fn flush_style_attribute(&mut self) {
+    pub fn flush_style_attribute(&mut self, base_url: Option<Url>) {
         if let NodeData::Element(ref mut elem_data) = self.data {
-            elem_data.flush_style_attribute(&self.guard);
+            elem_data.flush_style_attribute(&self.guard, base_url);
         }
     }
 
@@ -1066,7 +1107,7 @@ impl Node {
             return None;
         }
 
-        if self.is_inline_root {
+        if self.flags.is_inline_root() {
             let content_box_offset = taffy::Point {
                 x: self.final_layout.padding.left + self.final_layout.border.left,
                 y: self.final_layout.padding.top + self.final_layout.border.top,
@@ -1083,7 +1124,7 @@ impl Node {
             .rev()
             .find_map(|&i| self.with(i).hit(x, y))
             .or_else(|| {
-                if self.is_inline_root {
+                if self.flags.is_inline_root() {
                     let element_data = &self.element_data().unwrap();
                     let layout = &element_data.inline_layout_data.as_ref().unwrap().layout;
                     let scale = layout.scale();
@@ -1119,17 +1160,21 @@ impl Node {
 
     /// Creates a synthetic click event
     pub fn synthetic_click_event(&self, mods: Modifiers) -> DomEventData {
+        DomEventData::Click(self.synthetic_click_event_data(mods))
+    }
+
+    pub fn synthetic_click_event_data(&self, mods: Modifiers) -> BlitzMouseButtonEvent {
         let absolute_position = self.absolute_position(0.0, 0.0);
         let x = absolute_position.x + (self.final_layout.size.width / 2.0);
         let y = absolute_position.y + (self.final_layout.size.height / 2.0);
 
-        DomEventData::Click(BlitzMouseButtonEvent {
+        BlitzMouseButtonEvent {
             x,
             y,
             mods,
             button: Default::default(),
             buttons: Default::default(),
-        })
+        }
     }
 }
 
@@ -1148,7 +1193,7 @@ impl std::fmt::Debug for Node {
         f.debug_struct("NodeData")
             .field("parent", &self.parent)
             .field("id", &self.id)
-            .field("is_inline_root", &self.is_inline_root)
+            .field("is_inline_root", &self.flags.is_inline_root())
             .field("children", &self.children)
             .field("layout_children", &self.layout_children.borrow())
             // .field("style", &self.style)

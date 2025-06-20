@@ -1,12 +1,21 @@
 [package]
 name = "blitz-net"
-version = "0.1.0"
+description = "Blitz networking"
+version = "0.1.0-alpha.3"
+homepage = "https://github.com/dioxuslabs/blitz"
+repository = "https://github.com/dioxuslabs/blitz"
+documentation = "https://docs.rs/blitz-net"
 license.workspace = true
-edition = "2021"
+edition = "2024"
+
+[features]
+cookies = ["reqwest/cookies"]
 
 [dependencies]
-blitz-traits = { path = "../blitz-traits" }
+# Blitz dependencies
+blitz-traits = { version = "0.1.0-alpha.3", path = "../blitz-traits" }
+
+# Networking dependencies
 tokio = { workspace = true }
 reqwest = { workspace = true }
 data-url = { workspace = true }
-thiserror = { workspace = true }

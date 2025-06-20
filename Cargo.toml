@@ -1,19 +1,25 @@
 [workspace]
 members = [
+  "packages/anyrender",
+  "packages/anyrender_vello",
+  "packages/anyrender_vello_cpu",
+  "packages/anyrender_svg",
   "packages/blitz-traits",
   "packages/blitz-dom",
   "packages/blitz-html",
   "packages/blitz-js",
   "packages/blitz-net",
-  "packages/blitz-renderer-vello",
+  "packages/blitz-paint",
   "packages/blitz-shell",
   "packages/blitz",
-  "packages/dioxus-native",
+  "packages/mini-dxn",
   "packages/stylo_taffy",
-  "apps/wpt",
   "apps/readme",
+  "wpt/runner",
   "examples/counter",
+  "examples/wgpu_texture",
 ]
+exclude = ["sites"]
 resolver = "2"
 
 [workspace.package]
@@ -21,44 +27,45 @@ license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 # Servo dependencies
-style = { git = "https://github.com/KnorpelSenf/stylo", rev = "b80bff252df8b0c794c756ea4b46e664f7701356", package = "style" }               # 2025-02-28
-style_config = { git = "https://github.com/KnorpelSenf/stylo", rev = "b80bff252df8b0c794c756ea4b46e664f7701356", package = "style_config" } # 2025-02-28
-style_traits = { git = "https://github.com/KnorpelSenf/stylo", rev = "b80bff252df8b0c794c756ea4b46e664f7701356", package = "style_traits" } # 2025-02-28
-style_dom = { git = "https://github.com/KnorpelSenf/stylo", rev = "b80bff252df8b0c794c756ea4b46e664f7701356", package = "dom" }             # 2025-02-28
-selectors = { git = "https://github.com/KnorpelSenf/stylo", rev = "b80bff252df8b0c794c756ea4b46e664f7701356", package = "selectors" }       # 2025-02-28
+style = { version = "0.4", package = "stylo" }
+style_traits = { version = "0.4", package = "stylo_traits" }
+style_config = { version = "0.4", package = "stylo_config" }
+style_dom = { version = "0.4", package = "stylo_dom" }
+selectors = { version = "0.29", package = "selectors" }
 
-markup5ever = "0.14"      # needs to match stylo markup5ever version
-html5ever = "0.29"        # needs to match stylo markup5ever version
-xml5ever = "0.20"         # needs to match stylo markup5ever version
+markup5ever = "0.16.1" # needs to match stylo web_atoms version
+html5ever = "0.31" # needs to match stylo web_atoms version
+xml5ever = "0.22" # needs to match stylo web_atoms version
 euclid = "0.22"
-string_cache = "0.8.7"
 atomic_refcell = "0.1.13"
 app_units = "0.7.5"
 smallvec = "1"
 
 # DioxusLabs dependencies
-dioxus = { version = "0.6" }
-dioxus-core = { version = "0.6" }
-dioxus-html = { version = "0.6" }
-dioxus-cli-config = { version = "0.6" }
-dioxus-devtools = { version = "0.6" }
-taffy = { git = "https://github.com/dioxuslabs/taffy", rev = "8437796c", default-features = false, features = ["std", "flexbox", "grid", "block_layout", "content_size", "calc"] }
+dioxus = { version = "=0.7.0-alpha.1" }
+dioxus-core = { version = "=0.7.0-alpha.1" }
+dioxus-html = { version = "=0.7.0-alpha.1" }
+dioxus-hooks = { version = "=0.7.0-alpha.1" }
+dioxus-cli-config = { version = "=0.7.0-alpha.1" }
+dioxus-devtools = { version = "=0.7.0-alpha.1" }
+taffy = { version = "0.8", default-features = false, features = ["std", "flexbox", "grid", "block_layout", "content_size", "calc"] }
 
 # Linebender + WGPU + SVG
-color = "0.2"
-peniko = "0.3"
-parley = { git = "https://github.com/linebender/parley", default-features = false, features = ["std"]}
-wgpu = "23"
-vello = { version = "0.4", features = ["wgpu"] }
-vello_svg = { version = "0.6" }
-usvg = "0.44.0"
+color = "0.3"
+peniko = "0.4"
+kurbo = "0.11"
+parley = { version = "0.5", default-features = false, features = ["std"] }
+wgpu = "24"
+softbuffer = "0.4"
+vello = { version = "0.5", features = [ "wgpu" ] }
+vello_cpu = { version = "0.0.1" }
+usvg = "0.45.1"
 
 # Windowing & Input
 raw-window-handle = "0.6.0"
 winit = { version = "0.30.2", features = ["rwh_06"] }
 accesskit_winit = "0.23"
 accesskit = "0.17"
-muda = { version = "0.11.5", default-features = false }
 arboard = { version = "3.4.1", default-features = false }
 keyboard-types = "0.7"
 cursor-icon = "1"
@@ -72,9 +79,10 @@ reqwest = "0.12"
 
 # Media & Decoding
 image = { version = "0.25", default-features = false }
-woff = "0.3"
+woff = { version = "0.6", default-features = false }
 woff2 = "0.3"
 html-escape = "0.2.13"
+percent-encoding = "2.3.1"
 
 # Other dependencies
 rustc-hash = "1.1.0"
@@ -83,10 +91,10 @@ slab = "0.4.9"
 tracing = "0.1.40"
 futures-util = "0.3.30"
 futures-intrusive = "0.5.0"
-thiserror = "1.0.63"
 pollster = "0.4"
 smol_str = "0.2"
 bitflags = "2.8.0"
+bytemuck = "1"
 
 [profile.production]
 inherits = "release"
@@ -112,22 +120,25 @@ panic = "abort"
 name = "blitz-examples"
 version = "0.0.1"
 authors = ["Jonathan Kelley"]
-edition = "2021"
+edition = "2024"
 description = "Top level crate for Blitz"
 license = "MIT OR Apache-2.0"
 keywords = ["dom", "ui", "gui", "react", "wasm"]
-rust-version = "1.70.0"
+rust-version = "1.85.1"
 publish = false
 
 [dev-dependencies]
 blitz-dom = { path = "./packages/blitz-dom" }
 blitz-html = { path = "./packages/blitz-html" }
 blitz-traits = { path = "./packages/blitz-traits" }
-blitz-renderer-vello = { path = "./packages/blitz-renderer-vello" }
+blitz-paint = { path = "./packages/blitz-paint" }
+anyrender = { path = "./packages/anyrender" }
+anyrender_vello = { path = "./packages/anyrender_vello" }
+anyrender_vello_cpu = { path = "./packages/anyrender_vello_cpu" }
 blitz-shell = { path = "./packages/blitz-shell" }
 blitz-net = { path = "./packages/blitz-net" }
 blitz = { path = "./packages/blitz", features = ["net"] }
-dioxus-native = { path = "./packages/dioxus-native", features = ["tracing"] }
+mini-dxn = { path = "./packages/mini-dxn", features = ["tracing", "autofocus"] }
 dioxus = { workspace = true }
 euclid = { workspace = true }
 reqwest = { workspace = true }

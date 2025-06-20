@@ -16,41 +16,39 @@ pub(crate) const BULLET_FONT: &[u8] = include_bytes!("../assets/moz-bullet-font.
 /// The DOM implementation.
 ///
 /// This is the primary entry point for this crate.
-pub mod document;
-mod query_selector;
-
-/// Integration of taffy and the DOM.
-pub mod layout;
+mod document;
 
 /// The nodes themsleves, and their data.
-///
-/// todo: we want this to use ECS, but we're not done with the design yet.
 pub mod node;
 
+mod debug;
+mod events;
+mod form;
+/// Integration of taffy and the DOM.
+mod layout;
+mod mutator;
+mod query_selector;
 /// Implementations that interact with servo's style engine
-pub mod stylo;
-
-pub mod stylo_to_cursor_icon;
-pub mod stylo_to_parley;
-
-pub mod util;
-
-pub mod debug;
-
-pub mod events;
+mod stylo;
+mod stylo_to_cursor_icon;
+mod stylo_to_parley;
+mod traversal;
 
 pub mod net;
+pub mod util;
 
 #[cfg(feature = "accessibility")]
 mod accessibility;
 
-pub use document::BaseDocument;
+pub use document::{BaseDocument, Document};
 pub use markup5ever::{
-    local_name, namespace_prefix, namespace_url, ns, Namespace, NamespaceStaticSet, Prefix,
-    PrefixStaticSet, QualName,
+    LocalName, Namespace, NamespaceStaticSet, Prefix, PrefixStaticSet, QualName, local_name,
+    namespace_prefix, namespace_url, ns,
 };
-pub use node::{ElementNodeData, Node, NodeData, TextNodeData};
+pub use mutator::DocumentMutator;
+pub use node::{Attribute, ElementData, Node, NodeData, TextNodeData};
 pub use parley::FontContext;
-pub use string_cache::Atom;
+pub use style::Atom;
 pub use style::invalidation::element::restyle_hints::RestyleHint;
 pub type SelectorList = selectors::SelectorList<style::selector_parser::SelectorImpl>;
+pub use events::{EventDriver, EventHandler, NoopEventHandler};

@@ -11,13 +11,14 @@ use crate::net::ImageHandler;
 use crate::node::NodeData;
 use crate::util::ImageType;
 use atomic_refcell::{AtomicRef, AtomicRefMut};
-use markup5ever::{local_name, LocalName, LocalNameStaticSet, Namespace, NamespaceStaticSet};
+use markup5ever::{LocalName, LocalNameStaticSet, Namespace, NamespaceStaticSet, local_name};
 use selectors::{
+    Element, OpaqueElement,
     attr::{AttrSelectorOperation, AttrSelectorOperator, NamespaceConstraint},
     matching::{ElementSelectorFlags, MatchingContext, VisitedHandlingMode},
     sink::Push,
-    Element, OpaqueElement,
 };
+use style::CaseSensitivityExt;
 use style::applicable_declarations::ApplicableDeclarationBlock;
 use style::color::AbsoluteColor;
 use style::properties::{Importance, PropertyDeclaration};
@@ -26,12 +27,12 @@ use style::selector_parser::PseudoElement;
 use style::servo::url::ComputedUrl;
 use style::stylesheets::layer_rule::LayerOrder;
 use style::stylesheets::scope_rule::ImplicitScopeRoot;
+use style::values::AtomString;
 use style::values::computed::Percentage;
 use style::values::generics::image::Image as StyloImage;
 use style::values::specified::box_::DisplayOutside;
-use style::values::AtomString;
-use style::CaseSensitivityExt;
 use style::{
+    Atom,
     animation::DocumentAnimationSet,
     context::{
         QuirksMode, RegisteredSpeculativePainter, RegisteredSpeculativePainters,
@@ -39,8 +40,8 @@ use style::{
     },
     dom::{LayoutIterator, NodeInfo, OpaqueNode, TDocument, TElement, TNode, TShadowRoot},
     global_style_data::GLOBAL_STYLE_DATA,
-    properties::generated::longhands::position::computed_value::T as Position,
     properties::PropertyDeclarationBlock,
+    properties::generated::longhands::position::computed_value::T as Position,
     selector_parser::{NonTSPseudoClass, SelectorImpl},
     servo_arc::{Arc, ArcBorrow},
     shared_lock::{Locked, SharedRwLock, StylesheetGuards},
@@ -48,7 +49,6 @@ use style::{
     traversal::{DomTraversal, PerLevelTraversalData},
     traversal_flags::TraversalFlags,
     values::{AtomIdent, GenericAtomIdent},
-    Atom,
 };
 use style_dom::ElementState;
 
@@ -522,6 +522,9 @@ impl selectors::Element for BlitzNode<'_> {
             NonTSPseudoClass::Required => false,
             NonTSPseudoClass::UserInvalid => false,
             NonTSPseudoClass::UserValid => false,
+            NonTSPseudoClass::MozMeterOptimum => false,
+            NonTSPseudoClass::MozMeterSubOptimum => false,
+            NonTSPseudoClass::MozMeterSubSubOptimum => false,
         }
     }
 
@@ -866,6 +869,8 @@ impl<'a> TElement for BlitzNode<'a> {
             return;
         };
 
+        let tag = &elem.name.local;
+
         let mut push_style = |decl: PropertyDeclaration| {
             hints.push(ApplicableDeclarationBlock::from_declarations(
                 Arc::new(
@@ -900,7 +905,10 @@ impl<'a> TElement for BlitzNode<'a> {
             None
         }
 
-        fn parse_size_attr(value: &str) -> Option<style::values::specified::LengthPercentage> {
+        fn parse_size_attr(
+            value: &str,
+            filter_fn: impl FnOnce(&f32) -> bool,
+        ) -> Option<style::values::specified::LengthPercentage> {
             use style::values::specified::{AbsoluteLength, LengthPercentage, NoCalcLength};
             if let Some(value) = value.strip_suffix("px") {
                 let val: f32 = value.parse().ok()?;
@@ -914,7 +922,7 @@ impl<'a> TElement for BlitzNode<'a> {
                 return Some(LengthPercentage::Percentage(Percentage(val / 100.0)));
             }
 
-            let val: f32 = value.parse().ok()?;
+            let val: f32 = value.parse().ok().filter(filter_fn)?;
             Some(LengthPercentage::Length(NoCalcLength::Absolute(
                 AbsoluteLength::Px(val),
             )))
@@ -938,18 +946,33 @@ impl<'a> TElement for BlitzNode<'a> {
                 }
             }
 
-            if *name == local_name!("width") {
-                if let Some(width) = parse_size_attr(value) {
-                    use style::values::generics::{length::Size, NonNegative};
+            // https://html.spec.whatwg.org/multipage/rendering.html#dimRendering
+            if *name == local_name!("width")
+                && (*tag == local_name!("table")
+                    || *tag == local_name!("col")
+                    || *tag == local_name!("tr")
+                    || *tag == local_name!("td")
+                    || *tag == local_name!("th")
+                    || *tag == local_name!("hr"))
+            {
+                let is_table = *tag == local_name!("table");
+                if let Some(width) = parse_size_attr(value, |v| !is_table || *v != 0.0) {
+                    use style::values::generics::{NonNegative, length::Size};
+
                     push_style(PropertyDeclaration::Width(Size::LengthPercentage(
                         NonNegative(width),
                     )));
                 }
             }
 
-            if *name == local_name!("height") {
-                if let Some(height) = parse_size_attr(value) {
-                    use style::values::generics::{length::Size, NonNegative};
+            if *name == local_name!("height")
+                && (*tag == local_name!("table")
+                    || *tag == local_name!("thead")
+                    || *tag == local_name!("tbody")
+                    || *tag == local_name!("tfoot"))
+            {
+                if let Some(height) = parse_size_attr(value, |_| true) {
+                    use style::values::generics::{NonNegative, length::Size};
                     push_style(PropertyDeclaration::Height(Size::LengthPercentage(
                         NonNegative(height),
                     )));
@@ -963,6 +986,11 @@ impl<'a> TElement for BlitzNode<'a> {
                         Color::from_absolute_color(AbsoluteColor::srgb_legacy(r, g, b, a)),
                     ));
                 }
+            }
+
+            if *name == local_name!("hidden") {
+                use style::values::specified::Display;
+                push_style(PropertyDeclaration::Display(Display::None));
             }
         }
     }

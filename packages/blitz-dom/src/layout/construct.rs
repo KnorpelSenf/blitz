@@ -1,11 +1,11 @@
 use core::str;
 use std::sync::Arc;
 
-use markup5ever::{local_name, namespace_url, ns, QualName};
+use markup5ever::{QualName, local_name, ns};
 use parley::{FontStack, InlineBox, StyleProperty, TreeBuilder, WhiteSpaceCollapse};
 use slab::Slab;
 use style::{
-    data::ElementData,
+    data::ElementData as StyloElementData,
     properties::longhands::{
         list_style_position::computed_value::T as ListStylePosition,
         list_style_type::computed_value::T as ListStyleType,
@@ -18,11 +18,12 @@ use style::{
 };
 
 use crate::{
+    BaseDocument, ElementData, Node, NodeData,
     node::{
-        ListItemLayout, ListItemLayoutPosition, Marker, NodeKind, NodeSpecificData, TextBrush,
-        TextInputData, TextLayout,
+        ListItemLayout, ListItemLayoutPosition, Marker, NodeFlags, NodeKind, SpecialElementData,
+        TextBrush, TextInputData, TextLayout,
     },
-    stylo_to_parley, BaseDocument, ElementNodeData, Node, NodeData,
+    stylo_to_parley,
 };
 
 use super::table::build_table_context;
@@ -43,15 +44,26 @@ fn push_children_and_pseudos(layout_children: &mut Vec<usize>, node: &Node) {
     }
 }
 
+/// Convert a relative line height to an absolute one
+fn resolve_line_height(line_height: parley::LineHeight, font_size: f32) -> f32 {
+    match line_height {
+        parley::LineHeight::FontSizeRelative(relative) => relative * font_size,
+        parley::LineHeight::Absolute(absolute) => absolute,
+        parley::LineHeight::MetricsRelative(_) => unreachable!(),
+    }
+}
+
 pub(crate) fn collect_layout_children(
     doc: &mut BaseDocument,
     container_node_id: usize,
     layout_children: &mut Vec<usize>,
     anonymous_block_id: &mut Option<usize>,
 ) {
-    // Reset inline layout
+    // Reset construction flags
     // TODO: make incremental and only remove this if the element is no longer an inline root
-    doc.nodes[container_node_id].is_inline_root = false;
+    doc.nodes[container_node_id]
+        .flags
+        .reset_construction_flags();
     if let Some(element_data) = doc.nodes[container_node_id].element_data_mut() {
         element_data.take_inline_layout();
     }
@@ -71,7 +83,7 @@ pub(crate) fn collect_layout_children(
                 return;
             } else if matches!(
                 type_attr,
-                Some("text" | "password" | "email" | "number" | "search" | "tel" | "url")
+                None | Some("text" | "password" | "email" | "number" | "search" | "tel" | "url")
             ) {
                 create_text_editor(doc, container_node_id, false);
                 return;
@@ -83,8 +95,6 @@ pub(crate) fn collect_layout_children(
 
         #[cfg(feature = "svg")]
         if matches!(tag_name, "svg") {
-            use crate::node::ImageData;
-
             let mut outer_html = doc.get_node(container_node_id).unwrap().outer_html();
 
             // HACK: usvg fails to parse SVGs that don't have the SVG xmlns set. So inject it
@@ -100,12 +110,11 @@ pub(crate) fn collect_layout_children(
                         .unwrap()
                         .element_data_mut()
                         .unwrap()
-                        .node_specific_data =
-                        NodeSpecificData::Image(Box::new(ImageData::Svg(svg)));
+                        .special_data = SpecialElementData::Image(Box::new(svg.into()));
                 }
                 Err(err) => {
-                    println!("{} SVG parse failed", container_node_id);
-                    println!("{}", outer_html);
+                    println!("{container_node_id} SVG parse failed");
+                    println!("{outer_html}");
                     dbg!(err);
                 }
             };
@@ -190,7 +199,9 @@ pub(crate) fn collect_layout_children(
             // TODO: fix display:contents
             if all_inline {
                 let (inline_layout, ilayout_children) = build_inline_layout(doc, container_node_id);
-                doc.nodes[container_node_id].is_inline_root = true;
+                doc.nodes[container_node_id]
+                    .flags
+                    .insert(NodeFlags::IS_INLINE_ROOT);
                 doc.nodes[container_node_id]
                     .data
                     .downcast_element_mut()
@@ -262,13 +273,15 @@ pub(crate) fn collect_layout_children(
         DisplayInside::Table => {
             let (table_context, tlayout_children) = build_table_context(doc, container_node_id);
             #[allow(clippy::arc_with_non_send_sync)]
-            let data = NodeSpecificData::TableRoot(Arc::new(table_context));
-            doc.nodes[container_node_id].is_table_root = true;
+            let data = SpecialElementData::TableRoot(Arc::new(table_context));
+            doc.nodes[container_node_id]
+                .flags
+                .insert(NodeFlags::IS_TABLE_ROOT);
             doc.nodes[container_node_id]
                 .data
                 .downcast_element_mut()
                 .unwrap()
-                .node_specific_data = data;
+                .special_data = data;
             if let Some(before) = doc.nodes[container_node_id].before {
                 layout_children.push(before);
             }
@@ -317,7 +330,7 @@ fn flush_pseudo_elements(doc: &mut BaseDocument, node_id: usize) {
 
         // Create pseudo element if it should exist but doesn't
         if let (None, Some(pe_style)) = (pe_node_id, &pe_style) {
-            let new_node_id = doc.create_node(NodeData::AnonymousBlock(ElementNodeData::new(
+            let new_node_id = doc.create_node(NodeData::AnonymousBlock(ElementData::new(
                 DUMMY_NAME,
                 Vec::new(),
             )));
@@ -337,7 +350,7 @@ fn flush_pseudo_elements(doc: &mut BaseDocument, node_id: usize) {
                 }
             }
 
-            let mut element_data = ElementData::default();
+            let mut element_data = StyloElementData::default();
             element_data.styles.primary = Some(pe_style.clone());
             element_data.set_restyled();
             *doc.nodes[new_node_id].stylo_element_data.borrow_mut() = Some(element_data);
@@ -353,7 +366,7 @@ fn flush_pseudo_elements(doc: &mut BaseDocument, node_id: usize) {
             let node_styles = &mut node_styles.as_mut().unwrap();
             let primary_styles = &mut node_styles.styles.primary;
 
-            if &**primary_styles.as_ref().unwrap() as *const _ != &*pe_style as *const _ {
+            if !std::ptr::eq(&**primary_styles.as_ref().unwrap(), &*pe_style) {
                 *primary_styles = Some(pe_style);
                 node_styles.set_restyled();
             }
@@ -432,18 +445,24 @@ fn node_list_item_child(
             }
 
             // Create a parley tree builder
-            let mut builder =
-                doc.layout_ctx
-                    .tree_builder(&mut doc.font_ctx, doc.viewport.scale(), &parley_style);
+            let mut builder = doc.layout_ctx.tree_builder(
+                &mut doc.font_ctx,
+                doc.viewport.scale(),
+                true,
+                &parley_style,
+            );
 
             match &marker {
-                Marker::Char(char) => builder.push_text(&char.to_string()),
+                Marker::Char(char) => {
+                    let mut buf = [0u8; 4];
+                    builder.push_text(char.encode_utf8(&mut buf));
+                }
                 Marker::String(str) => builder.push_text(str),
             };
 
             let mut layout = builder.build().0;
-
-            layout.break_all_lines(Some(0.0));
+            let width = layout.calculate_content_widths().max;
+            layout.break_all_lines(Some(width));
 
             ListItemLayoutPosition::Outside(Box::new(layout))
         }
@@ -462,7 +481,7 @@ fn marker_for_style(list_style_type: ListStyleType, index: usize) -> Option<Mark
         ListStyleType::LowerAlpha => {
             let mut marker = String::new();
             build_alpha_marker(index, &mut marker);
-            Marker::String(format!("{}. ", marker))
+            Marker::String(format!("{marker}. "))
         }
         ListStyleType::UpperAlpha => {
             let mut marker = String::new();
@@ -612,10 +631,8 @@ fn collect_complex_layout_children(
                     ns: ns!(html),
                     local: local_name!("div"),
                 };
-                let node_id = doc.create_node(NodeData::AnonymousBlock(ElementNodeData::new(
-                    NAME,
-                    Vec::new(),
-                )));
+                let node_id =
+                    doc.create_node(NodeData::AnonymousBlock(ElementData::new(NAME, Vec::new())));
 
                 // Set style data
                 let parent_style = doc.nodes[container_node_id].primary_styles().unwrap();
@@ -626,10 +643,10 @@ fn collect_complex_layout_children(
                     &PseudoElement::ServoAnonymousBox,
                     &parent_style,
                 );
-                let mut element_data = ElementData::default();
-                element_data.styles.primary = Some(style);
-                element_data.set_restyled();
-                *doc.nodes[node_id].stylo_element_data.borrow_mut() = Some(element_data);
+                let mut stylo_element_data = StyloElementData::default();
+                stylo_element_data.styles.primary = Some(style);
+                stylo_element_data.set_restyled();
+                *doc.nodes[node_id].stylo_element_data.borrow_mut() = Some(stylo_element_data);
 
                 layout_children.push(node_id);
                 *anonymous_block_id = Some(node_id);
@@ -672,7 +689,7 @@ fn create_text_editor(doc: &mut BaseDocument, input_element_id: usize, is_multil
         .unwrap_or_default();
 
     let element = &mut node.data.downcast_element_mut().unwrap();
-    if !matches!(element.node_specific_data, NodeSpecificData::TextInput(_)) {
+    if !matches!(element.special_data, SpecialElementData::TextInput(_)) {
         let mut text_input_data = TextInputData::new(is_multiline);
         let editor = &mut text_input_data.editor;
 
@@ -687,7 +704,7 @@ fn create_text_editor(doc: &mut BaseDocument, input_element_id: usize, is_multil
 
         editor.refresh_layout(&mut doc.font_ctx, &mut doc.layout_ctx);
 
-        element.node_specific_data = NodeSpecificData::TextInput(text_input_data);
+        element.special_data = SpecialElementData::TextInput(text_input_data);
     }
 }
 
@@ -695,13 +712,9 @@ fn create_checkbox_input(doc: &mut BaseDocument, input_element_id: usize) {
     let node = &mut doc.nodes[input_element_id];
 
     let element = &mut node.data.downcast_element_mut().unwrap();
-    if !matches!(
-        element.node_specific_data,
-        NodeSpecificData::CheckboxInput(_)
-    ) {
-        let checked = element.attr_parsed(local_name!("checked")).unwrap_or(false);
-
-        element.node_specific_data = NodeSpecificData::CheckboxInput(checked);
+    if !matches!(element.special_data, SpecialElementData::CheckboxInput(_)) {
+        let checked = element.has_attr(local_name!("checked"));
+        element.special_data = SpecialElementData::CheckboxInput(checked);
     }
 }
 
@@ -728,12 +741,12 @@ pub(crate) fn build_inline_layout(
 
     // dbg!(&parley_style);
 
-    let root_line_height = parley_style.line_height;
+    let root_line_height = resolve_line_height(parley_style.line_height, parley_style.font_size);
 
     // Create a parley tree builder
     let mut builder =
         doc.layout_ctx
-            .tree_builder(&mut doc.font_ctx, doc.viewport.scale(), &parley_style);
+            .tree_builder(&mut doc.font_ctx, doc.viewport.scale(), true, &parley_style);
 
     // Set whitespace collapsing mode
     let collapse_mode = root_node_style
@@ -751,7 +764,7 @@ pub(crate) fn build_inline_layout(
         .and_then(|el| el.list_item_data.as_deref())
     {
         match marker {
-            Marker::Char(char) => builder.push_text(&format!("{} ", char)),
+            Marker::Char(char) => builder.push_text(&format!("{char} ")),
             Marker::String(str) => builder.push_text(str),
         }
     };
@@ -838,11 +851,6 @@ pub(crate) fn build_inline_layout(
 
         match &node.data {
             NodeData::Element(element_data) | NodeData::AnonymousBlock(element_data) => {
-                // Hide hidden nodes
-                if let Some("hidden" | "") = element_data.attr(local_name!("hidden")) {
-                    return;
-                }
-
                 // if the input type is hidden, hide it
                 if *element_data.name.local == *"input" {
                     if let Some("hidden") = element_data.attr(local_name!("type")) {
@@ -873,6 +881,7 @@ pub(crate) fn build_inline_layout(
                             || *tag_name == local_name!("svg")
                             || *tag_name == local_name!("input")
                             || *tag_name == local_name!("textarea")
+                            || *tag_name == local_name!("button")
                         {
                             builder.push_inline_box(InlineBox {
                                 id: node_id as u64,
@@ -899,9 +908,14 @@ pub(crate) fn build_inline_layout(
 
                             // style.brush = peniko::Brush::Solid(peniko::Color::WHITE);
 
+                            let font_size = style.font_size;
+
                             // Floor the line-height of the span by the line-height of the inline context
                             // See https://www.w3.org/TR/CSS21/visudet.html#line-height
-                            style.line_height = style.line_height.max(root_line_height);
+                            style.line_height = parley::LineHeight::Absolute(
+                                resolve_line_height(style.line_height, font_size)
+                                    .max(root_line_height),
+                            );
 
                             // dbg!(node_id);
                             // dbg!(&style);

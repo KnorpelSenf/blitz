@@ -1,7 +1,7 @@
 //! Conversion functions from Stylo types to Parley types
 use std::borrow::Cow;
 
-use style::values::computed::Length;
+use style::values::computed::{Length, TextDecorationLine};
 
 use crate::node::TextBrush;
 use crate::util::ToColorColor;
@@ -10,6 +10,8 @@ use crate::util::ToColorColor;
 pub(crate) mod stylo {
     pub(crate) use style::computed_values::white_space_collapse::T as WhiteSpaceCollapse;
     pub(crate) use style::properties::ComputedValues;
+    pub(crate) use style::values::computed::OverflowWrap;
+    pub(crate) use style::values::computed::WordBreak;
     pub(crate) use style::values::computed::font::FontStyle;
     pub(crate) use style::values::computed::font::GenericFontFamily;
     pub(crate) use style::values::computed::font::LineHeight;
@@ -36,18 +38,16 @@ pub(crate) fn style(
     style: &stylo::ComputedValues,
 ) -> parley::TextStyle<'static, TextBrush> {
     let font_styles = style.get_font();
-    // let text_styles = style.get_text();
+    let text_styles = style.get_text();
     let itext_styles = style.get_inherited_text();
 
     // Convert font size and line height
     let font_size = font_styles.font_size.used_size.0.px();
-    let line_height: f32 = match font_styles.line_height {
-        stylo::LineHeight::Normal => font_size * 1.2,
-        stylo::LineHeight::Number(num) => font_size * num.0,
-        stylo::LineHeight::Length(value) => value.0.px(),
+    let line_height = match font_styles.line_height {
+        stylo::LineHeight::Normal => parley::LineHeight::FontSizeRelative(1.2),
+        stylo::LineHeight::Number(num) => parley::LineHeight::FontSizeRelative(num.0),
+        stylo::LineHeight::Length(value) => parley::LineHeight::Absolute(value.0.px()),
     };
-    // Parley expects line height as a multiple of font size!
-    let line_height = line_height / font_size;
 
     let letter_spacing = itext_styles
         .letter_spacing
@@ -63,6 +63,15 @@ pub(crate) fn style(
         val => parley::FontStyle::Oblique(Some(val.oblique_degrees())),
     };
     let font_width = parley::FontWidth::from_percentage(font_styles.font_stretch.0.to_float());
+    let font_variations: Vec<_> = font_styles
+        .font_variation_settings
+        .0
+        .iter()
+        .map(|v| parley::FontVariation {
+            tag: v.tag.0,
+            value: v.value,
+        })
+        .collect();
 
     // Convert font family
     let families: Vec<_> = font_styles
@@ -105,12 +114,26 @@ pub(crate) fn style(
     // Convert text colour
     let color = itext_styles.color.as_color_color();
 
+    // Text decorations
+    let text_decoration_line = text_styles.text_decoration_line;
     let decoration_brush = style
         .get_text()
         .text_decoration_color
         .as_absolute()
         .map(ToColorColor::as_color_color)
         .map(TextBrush::from_color);
+
+    // Wrapping and breaking
+    let word_break = match itext_styles.word_break {
+        stylo::WordBreak::Normal => parley::WordBreakStrength::Normal,
+        stylo::WordBreak::BreakAll => parley::WordBreakStrength::BreakAll,
+        stylo::WordBreak::KeepAll => parley::WordBreakStrength::KeepAll,
+    };
+    let overflow_wrap = match itext_styles.overflow_wrap {
+        stylo::OverflowWrap::Normal => parley::OverflowWrap::Normal,
+        stylo::OverflowWrap::BreakWord => parley::OverflowWrap::BreakWord,
+        stylo::OverflowWrap::Anywhere => parley::OverflowWrap::Anywhere,
+    };
 
     parley::TextStyle {
         // font_stack: parley::FontStack::Single(FontFamily::Generic(GenericFamily::SystemUi)),
@@ -119,20 +142,22 @@ pub(crate) fn style(
         font_width,
         font_style,
         font_weight,
-        font_variations: parley::FontSettings::List(Cow::Borrowed(&[])),
+        font_variations: parley::FontSettings::List(Cow::Owned(font_variations)),
         font_features: parley::FontSettings::List(Cow::Borrowed(&[])),
         locale: Default::default(),
         brush: TextBrush::from_id_and_color(span_id, color),
-        has_underline: itext_styles.text_decorations_in_effect.underline,
+        has_underline: text_decoration_line.contains(TextDecorationLine::UNDERLINE),
         underline_offset: Default::default(),
         underline_size: Default::default(),
         underline_brush: decoration_brush.clone(),
-        has_strikethrough: itext_styles.text_decorations_in_effect.line_through,
+        has_strikethrough: text_decoration_line.contains(TextDecorationLine::LINE_THROUGH),
         strikethrough_offset: Default::default(),
         strikethrough_size: Default::default(),
         strikethrough_brush: decoration_brush,
         line_height,
         word_spacing: Default::default(),
         letter_spacing,
+        overflow_wrap,
+        word_break,
     }
 }

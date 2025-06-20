@@ -1,32 +1,38 @@
 use crate::events::handle_event;
 use crate::layout::construct::collect_layout_children;
-use crate::node::{ImageData, NodeSpecificData, Status, TextBrush};
+use crate::mutator::ViewportMut;
+use crate::node::{ImageData, RasterImageData, SpecialElementData, Status, TextBrush};
 use crate::stylo_to_cursor_icon::stylo_to_cursor_icon;
-use crate::util::{resolve_url, ImageType};
-use crate::{ElementNodeData, Node, NodeData, TextNodeData};
+use crate::traversal::{AncestorTraverser, TreeTraverser};
+use crate::util::{ImageType, resolve_url};
+use crate::{DocumentMutator, ElementData, Node, NodeData, TextNodeData};
 use app_units::Au;
+use blitz_traits::events::UiEvent;
 use blitz_traits::navigation::{DummyNavigationProvider, NavigationProvider};
 use blitz_traits::net::{DummyNetProvider, SharedProvider};
-use blitz_traits::{ColorScheme, Document, Viewport};
+use blitz_traits::shell::{DummyShellProvider, ShellProvider};
+use blitz_traits::{ColorScheme, Devtools, Viewport};
 use blitz_traits::{DomEvent, HitResult};
 use cursor_icon::CursorIcon;
 use markup5ever::local_name;
 use parley::FontContext;
-use peniko::kurbo;
-use string_cache::Atom;
+use peniko::{Blob, kurbo};
+use style::Atom;
 use style::attr::{AttrIdentifier, AttrValue};
-use style::data::{ElementData, ElementStyles};
-use style::properties::style_structs::Font;
+use style::data::{ElementData as StyloElementData, ElementStyles};
 use style::properties::ComputedValues;
-use style::values::computed::Overflow;
+use style::properties::style_structs::Font;
 use style::values::GenericAtomIdent;
+use style::values::computed::Overflow;
 // use quadtree_rs::Quadtree;
 use crate::net::{Resource, StylesheetLoader};
-use selectors::{matching::QuirksMode, Element};
+use selectors::{Element, matching::QuirksMode};
 use slab::Slab;
-use std::collections::{BTreeMap, Bound, HashMap, HashSet, VecDeque};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::any::Any;
+use std::collections::{BTreeMap, Bound, HashMap, HashSet};
+use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use style::media_queries::MediaType;
 use style::queries::values::PrefersColorScheme;
 use style::selector_parser::ServoElementSnapshot;
@@ -43,17 +49,33 @@ use style::{
 use taffy::AvailableSpace;
 use url::Url;
 
+pub trait Document: Deref<Target = BaseDocument> + DerefMut + 'static {
+    fn poll(&mut self, cx: std::task::Context) -> bool {
+        // Default implementation does nothing
+        let _ = cx;
+        false
+    }
+
+    fn handle_event(&mut self, event: UiEvent) {
+        // Default implementation does nothing
+        let _ = event;
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any;
+
+    fn id(&self) -> usize;
+}
+
 // TODO: implement a proper font metrics provider
 #[derive(Debug, Clone)]
-pub struct DummyFontMetricsProvider;
+struct DummyFontMetricsProvider;
 impl FontMetricsProvider for DummyFontMetricsProvider {
     fn query_font_metrics(
         &self,
         _vertical: bool,
-        _font: &style::properties::style_structs::Font,
+        _font: &Font,
         _base_size: style::values::computed::CSSPixelLength,
-        _in_media_query: bool,
-        _retrieve_math_scales: bool,
+        _flags: style::values::computed::font::QueryFontMetricsFlags,
     ) -> style::font_metrics::FontMetrics {
         Default::default()
     }
@@ -94,13 +116,15 @@ pub struct BaseDocument {
     pub nodes_to_id: HashMap<String, usize>,
 
     /// Base url for resolving linked resources (stylesheets, images, fonts, etc)
-    pub(crate) base_url: Option<url::Url>,
+    pub base_url: Option<url::Url>,
 
     // /// The quadtree we use for hit-testing
     // pub(crate) quadtree: Quadtree<u64, usize>,
 
     // Viewport details such as the dimensions, HiDPI scale, and zoom factor,
     pub(crate) viewport: Viewport,
+    // Devtool settings. Currently used to render debug overlays
+    pub(crate) devtool_settings: Devtools,
 
     // Scroll within our viewport
     pub(crate) viewport_scroll: kurbo::Point,
@@ -123,8 +147,15 @@ pub struct BaseDocument {
     pub(crate) focus_node_id: Option<usize>,
     /// The node which is currently active (if any)
     pub(crate) active_node_id: Option<usize>,
+    /// The node which recieved a mousedown event (if any)
+    pub(crate) mousedown_node_id: Option<usize>,
+    /// Whether there are active animations (so we should re-render every frame)
+    pub(crate) is_animating: bool,
 
     pub changed: HashSet<usize>,
+
+    /// A map from control node ID's to their associated forms node ID's
+    pub controls_to_form: HashMap<usize, usize>,
 
     /// Network provider. Can be used to fetch assets.
     pub net_provider: SharedProvider<Resource>,
@@ -132,9 +163,12 @@ pub struct BaseDocument {
     /// Navigation provider. Can be used to navigate to a new page (bubbles up the event
     /// on e.g. clicking a Link)
     pub navigation_provider: Arc<dyn NavigationProvider>,
+
+    /// Shell provider. Can be used to request a redraw or set the cursor icon
+    pub shell_provider: Arc<dyn ShellProvider>,
 }
 
-fn make_device(viewport: &Viewport) -> Device {
+pub(crate) fn make_device(viewport: &Viewport) -> Device {
     let width = viewport.window_size.0 as f32 / viewport.scale();
     let height = viewport.window_size.1 as f32 / viewport.scale();
     let viewport_size = euclid::Size2D::new(width, height);
@@ -154,14 +188,12 @@ fn make_device(viewport: &Viewport) -> Device {
     )
 }
 
-impl Document for BaseDocument {
-    type Doc = Self;
-    fn handle_event(&mut self, event: &mut DomEvent) {
-        handle_event(self, event)
+impl BaseDocument {
+    pub fn handle_event<F: FnMut(DomEvent)>(&mut self, event: &mut DomEvent, dispatch_event: F) {
+        handle_event(self, event, dispatch_event)
     }
-
-    fn id(&self) -> usize {
-        self.id
+    pub fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
     }
 }
 
@@ -185,11 +217,12 @@ impl BaseDocument {
         style_config::set_bool("layout.flexbox.enabled", true);
         style_config::set_bool("layout.grid.enabled", true);
         style_config::set_bool("layout.legacy_layout", true);
+        style_config::set_bool("layout.unimplemented", true);
         style_config::set_bool("layout.columns.enabled", true);
 
         font_ctx
             .collection
-            .register_fonts(crate::BULLET_FONT.to_vec());
+            .register_fonts(Blob::new(Arc::new(crate::BULLET_FONT) as _), None);
 
         let mut doc = Self {
             id,
@@ -199,6 +232,7 @@ impl BaseDocument {
             snapshots,
             nodes_to_id,
             viewport,
+            devtool_settings: Devtools::default(),
             viewport_scroll: kurbo::Point::ZERO,
             base_url: None,
             // quadtree: Quadtree::new(20),
@@ -210,16 +244,20 @@ impl BaseDocument {
             hover_node_id: None,
             focus_node_id: None,
             active_node_id: None,
+            mousedown_node_id: None,
+            is_animating: false,
             changed: HashSet::new(),
-            net_provider: Arc::new(DummyNetProvider::default()),
-            navigation_provider: Arc::new(DummyNavigationProvider {}),
+            controls_to_form: HashMap::new(),
+            net_provider: Arc::new(DummyNetProvider),
+            navigation_provider: Arc::new(DummyNavigationProvider),
+            shell_provider: Arc::new(DummyShellProvider),
         };
 
         // Initialise document with root Document node
         doc.create_node(NodeData::Document);
 
         // Stylo data on the root node container is needed to render the node
-        let stylo_element_data = ElementData {
+        let stylo_element_data = StyloElementData {
             styles: ElementStyles {
                 primary: Some(
                     ComputedValues::initial_values_with_font_override(Font::initial_values())
@@ -242,6 +280,11 @@ impl BaseDocument {
     /// Set the Document's navigation provider
     pub fn set_navigation_provider(&mut self, navigation_provider: Arc<dyn NavigationProvider>) {
         self.navigation_provider = navigation_provider;
+    }
+
+    /// Set the Document's shell provider
+    pub fn set_shell_provider(&mut self, shell_provider: Arc<dyn ShellProvider>) {
+        self.shell_provider = shell_provider;
     }
 
     /// Set base url for resolving linked resources (stylesheets, images, fonts, etc)
@@ -274,19 +317,22 @@ impl BaseDocument {
             .or(self.try_root_element().map(|el| el.id))
     }
 
+    pub fn mutate<'doc>(&'doc mut self) -> DocumentMutator<'doc> {
+        DocumentMutator::new(self)
+    }
+
     /// Find the label's bound input elements:
     /// the element id referenced by the "for" attribute of a given label element
     /// or the first input element which is nested in the label
     /// Note that although there should only be one bound element,
     /// we return all possibilities instead of just the first
     /// in order to allow the caller to decide which one is correct
-    pub fn label_bound_input_elements(&self, label_node_id: usize) -> Vec<&Node> {
-        let label_node = self.get_node(label_node_id).unwrap();
-        let label_element = label_node.element_data().unwrap();
+    pub fn label_bound_input_element(&self, label_node_id: usize) -> Option<&Node> {
+        let label_element = self.nodes[label_node_id].element_data()?;
         if let Some(target_element_dom_id) = label_element.attr(local_name!("for")) {
-            self.tree()
-                .into_iter()
-                .filter_map(|(_id, node)| {
+            TreeTraverser::new(self)
+                .filter_map(|id| {
+                    let node = self.get_node(id)?;
                     let element_data = node.element_data()?;
                     if element_data.name.local != local_name!("input") {
                         return None;
@@ -298,13 +344,11 @@ impl BaseDocument {
                         None
                     }
                 })
-                .collect()
+                .next()
         } else {
-            label_node
-                .children
-                .iter()
+            TreeTraverser::new_with_root(self, label_node_id)
                 .filter_map(|child_id| {
-                    let node = self.get_node(*child_id)?;
+                    let node = self.get_node(child_id)?;
                     let element_data = node.element_data()?;
                     if element_data.name.local == local_name!("input") {
                         Some(node)
@@ -312,15 +356,17 @@ impl BaseDocument {
                         None
                     }
                 })
-                .collect()
+                .next()
         }
     }
 
-    pub fn toggle_checkbox(el: &mut ElementNodeData) {
+    pub fn toggle_checkbox(el: &mut ElementData) -> bool {
         let Some(is_checked) = el.checkbox_input_checked_mut() else {
-            return;
+            return false;
         };
         *is_checked = !*is_checked;
+
+        *is_checked
     }
 
     pub fn toggle_radio(&mut self, radio_set_name: String, target_radio_id: usize) {
@@ -356,24 +402,14 @@ impl BaseDocument {
 
     pub fn create_node(&mut self, node_data: NodeData) -> usize {
         let slab_ptr = self.nodes.as_mut() as *mut Slab<Node>;
-        let entry = self.nodes.vacant_entry();
-        let id = entry.key();
         let guard = self.guard.clone();
 
+        let entry = self.nodes.vacant_entry();
+        let id = entry.key();
         entry.insert(Node::new(slab_ptr, id, guard, node_data));
-
-        // self.quadtree.insert(
-        //     AreaBuilder::default()
-        //         .anchor(quadtree_rs::point::Point { x: 4, y: 5 })
-        //         .dimensions((2, 3))
-        //         .build()
-        //         .unwrap(),
-        //     id as usize,
-        // );
 
         // Mark the new node as changed.
         self.changed.insert(id);
-
         id
     }
 
@@ -580,13 +616,15 @@ impl BaseDocument {
             Resource::Css(node_id, css) => {
                 self.add_stylesheet_for_node(css, node_id);
             }
-            Resource::Image(node_id, kind, image) => {
+            Resource::Image(node_id, kind, width, height, image_data) => {
                 let node = self.get_node_mut(node_id).unwrap();
 
                 match kind {
                     ImageType::Image => {
-                        node.element_data_mut().unwrap().node_specific_data =
-                            NodeSpecificData::Image(Box::new(ImageData::from(image)));
+                        node.element_data_mut().unwrap().special_data =
+                            SpecialElementData::Image(Box::new(ImageData::Raster(
+                                RasterImageData::new(width, height, image_data),
+                            )));
 
                         // Clear layout cache
                         node.cache.clear();
@@ -597,7 +635,8 @@ impl BaseDocument {
                             .and_then(|el| el.background_images.get_mut(idx))
                         {
                             bg_image.status = Status::Ok;
-                            bg_image.image = ImageData::from(image);
+                            bg_image.image =
+                                ImageData::Raster(RasterImageData::new(width, height, image_data))
                         }
                     }
                 }
@@ -608,8 +647,8 @@ impl BaseDocument {
 
                 match kind {
                     ImageType::Image => {
-                        node.element_data_mut().unwrap().node_specific_data =
-                            NodeSpecificData::Image(Box::new(ImageData::Svg(*tree)));
+                        node.element_data_mut().unwrap().special_data =
+                            SpecialElementData::Image(Box::new(ImageData::Svg(tree)));
 
                         // Clear layout cache
                         node.cache.clear();
@@ -620,14 +659,22 @@ impl BaseDocument {
                             .and_then(|el| el.background_images.get_mut(idx))
                         {
                             bg_image.status = Status::Ok;
-                            bg_image.image = ImageData::Svg(*tree);
+                            bg_image.image = ImageData::Svg(tree);
                         }
                     }
                 }
             }
             Resource::Font(bytes) => {
-                self.font_ctx.collection.register_fonts(bytes.to_vec());
+                // TODO: Implement FontInfoOveride
+                // TODO: Investigate eliminating double-box
+                self.font_ctx
+                    .collection
+                    .register_fonts(Blob::new(Arc::new(bytes)) as _, None);
             }
+            Resource::None => {
+                // Do nothing
+            }
+            _ => {}
         }
     }
 
@@ -882,12 +929,15 @@ impl BaseDocument {
         }
     }
 
+    pub fn set_mousedown_node_id(&mut self, node_id: Option<usize>) {
+        self.mousedown_node_id = node_id;
+    }
     pub fn set_focus_to(&mut self, focus_node_id: usize) -> bool {
         if Some(focus_node_id) == self.focus_node_id {
             return false;
         }
 
-        println!("Focussed node {}", focus_node_id);
+        println!("Focussed node {focus_node_id}");
 
         // Remove focus from the old node
         if let Some(id) = self.focus_node_id {
@@ -964,6 +1014,13 @@ impl BaseDocument {
 
         self.hover_node_id = hover_node_id;
 
+        // Update the cursor
+        let cursor = self.get_cursor().unwrap_or_default();
+        self.shell_provider.set_cursor(cursor);
+
+        // Request redraw
+        self.shell_provider.request_redraw();
+
         true
     }
 
@@ -974,10 +1031,41 @@ impl BaseDocument {
     pub fn set_viewport(&mut self, viewport: Viewport) {
         self.viewport = viewport;
         self.set_stylist_device(make_device(&self.viewport));
+        self.scroll_viewport_by(0.0, 0.0); // Clamp scroll offset
+    }
+
+    pub fn viewport(&self) -> &Viewport {
+        &self.viewport
+    }
+
+    pub fn viewport_mut(&mut self) -> ViewportMut<'_> {
+        ViewportMut::new(self)
+    }
+
+    pub fn zoom_by(&mut self, increment: f32) {
+        *self.viewport.zoom_mut() += increment;
+        self.set_viewport(self.viewport.clone());
+    }
+
+    pub fn zoom_to(&mut self, zoom: f32) {
+        *self.viewport.zoom_mut() = zoom;
+        self.set_viewport(self.viewport.clone());
     }
 
     pub fn get_viewport(&self) -> Viewport {
         self.viewport.clone()
+    }
+
+    pub fn devtools(&self) -> &Devtools {
+        &self.devtool_settings
+    }
+
+    pub fn devtools_mut(&mut self) -> &mut Devtools {
+        &mut self.devtool_settings
+    }
+
+    pub fn is_animating(&self) -> bool {
+        self.is_animating
     }
 
     /// Update the device and reset the stylist to process the new size
@@ -1020,10 +1108,9 @@ impl BaseDocument {
     }
 
     /// Walk the nodes now that they're properly styled and transfer their styles to the taffy style system
-    /// Ideally we could just break apart the styles into ECS bits, but alas
     ///
-    /// Todo: update taffy to use an associated type instead of slab key
-    /// Todo: update taffy to support traited styles so we don't even need to rely on taffy for storage
+    /// TODO: update taffy to use an associated type instead of slab key
+    /// TODO: update taffy to support traited styles so we don't even need to rely on taffy for storage
     pub fn resolve_layout(&mut self) {
         let size = self.stylist.device().au_viewport_size();
 
@@ -1177,34 +1264,41 @@ impl BaseDocument {
     where
         F: FnMut(usize, &Node),
     {
-        let mut stack = VecDeque::new();
-        stack.push_front(0);
+        TreeTraverser::new(self).for_each(|node_id| visit(node_id, &self.nodes[node_id]));
+    }
 
-        while let Some(node_key) = stack.pop_back() {
-            let node = &self.nodes[node_key];
-            visit(node_key, node);
+    pub fn find_title_node(&self) -> Option<&Node> {
+        TreeTraverser::new(self)
+            .find(|node_id| {
+                self.nodes[*node_id]
+                    .data
+                    .is_element_with_tag_name(&local_name!("title"))
+            })
+            .map(|node_id| &self.nodes[node_id])
+    }
 
-            for &child_key in &node.children {
-                stack.push_front(child_key);
+    pub(crate) fn compute_is_animating(&self) -> bool {
+        TreeTraverser::new(self).any(|node_id| {
+            let node = &self.nodes[node_id];
+            let Some(element) = node.element_data() else {
+                return false;
+            };
+            if element.name.local == local_name!("canvas") && element.has_attr(local_name!("data"))
+            {
+                return true;
             }
-        }
+
+            false
+        })
     }
 
     /// Collect the nodes into a chain by traversing upwards
     pub fn node_chain(&self, node_id: usize) -> Vec<usize> {
-        let mut next_node_id = Some(node_id);
         let mut chain = Vec::with_capacity(16);
-
-        while let Some(node_id) = next_node_id {
-            let node = &self.tree()[node_id];
-
-            if node.is_element() {
-                chain.push(node_id);
-            }
-
-            next_node_id = node.parent;
-        }
-
+        chain.push(node_id);
+        chain.extend(
+            AncestorTraverser::new(self, node_id).filter(|id| self.nodes[*id].is_element()),
+        );
         chain
     }
 }

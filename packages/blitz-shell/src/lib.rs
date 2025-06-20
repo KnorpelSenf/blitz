@@ -6,16 +6,12 @@
 //!  - `default`: Enables the features listed below.
 //!  - `accessibility`: Enables [`accesskit`] accessibility support.
 //!  - `hot-reload`: Enables hot-reloading of Dioxus RSX.
-//!  - `menu`: Enables the [`muda`] menubar.
 //!  - `tracing`: Enables tracing support.
 
 mod application;
 mod convert_events;
 mod event;
 mod window;
-
-#[cfg(all(feature = "menu", not(any(target_os = "android", target_os = "ios"))))]
-mod menu;
 
 #[cfg(feature = "accessibility")]
 mod accessibility;
@@ -26,9 +22,10 @@ pub use crate::window::{View, WindowConfig};
 
 use blitz_dom::net::Resource;
 use blitz_traits::net::NetCallback;
+use blitz_traits::shell::ShellProvider;
 use std::sync::Arc;
-use winit::event_loop::EventLoopProxy;
-use winit::event_loop::{ControlFlow, EventLoop};
+use winit::event_loop::{ControlFlow, EventLoop, EventLoopProxy};
+use winit::window::{CursorIcon, Window};
 
 #[derive(Default)]
 pub struct Config {
@@ -77,15 +74,74 @@ impl BlitzShellNetCallback {
         Self(proxy)
     }
 
-    pub fn shared(proxy: EventLoopProxy<BlitzShellEvent>) -> Arc<dyn NetCallback<Data = Resource>> {
+    pub fn shared(proxy: EventLoopProxy<BlitzShellEvent>) -> Arc<dyn NetCallback<Resource>> {
         Arc::new(Self(proxy))
     }
 }
-impl NetCallback for BlitzShellNetCallback {
-    type Data = Resource;
-    fn call(&self, doc_id: usize, data: Self::Data) {
-        self.0
-            .send_event(BlitzShellEvent::ResourceLoad { doc_id, data })
-            .unwrap()
+impl NetCallback<Resource> for BlitzShellNetCallback {
+    fn call(&self, doc_id: usize, result: Result<Resource, Option<String>>) {
+        // TODO: handle error case
+        if let Ok(data) = result {
+            self.0
+                .send_event(BlitzShellEvent::ResourceLoad { doc_id, data })
+                .unwrap()
+        }
+    }
+}
+
+pub struct BlitzShellProvider {
+    window: Arc<Window>,
+}
+impl BlitzShellProvider {
+    pub fn new(window: Arc<Window>) -> Self {
+        Self { window }
+    }
+}
+
+impl ShellProvider for BlitzShellProvider {
+    fn request_redraw(&self) {
+        self.window.request_redraw();
+    }
+    fn set_cursor(&self, icon: CursorIcon) {
+        self.window.set_cursor(icon);
+    }
+    fn set_window_title(&self, title: String) {
+        self.window.set_title(&title);
+    }
+
+    #[cfg(all(
+        feature = "clipboard",
+        any(
+            target_os = "windows",
+            target_os = "macos",
+            target_os = "linux",
+            target_os = "dragonfly",
+            target_os = "freebsd",
+            target_os = "netbsd",
+            target_os = "openbsd"
+        )
+    ))]
+    fn get_clipboard_text(&self) -> Result<String, blitz_traits::shell::ClipboardError> {
+        let mut cb = arboard::Clipboard::new().unwrap();
+        cb.get_text()
+            .map_err(|_| blitz_traits::shell::ClipboardError)
+    }
+
+    #[cfg(all(
+        feature = "clipboard",
+        any(
+            target_os = "windows",
+            target_os = "macos",
+            target_os = "linux",
+            target_os = "dragonfly",
+            target_os = "freebsd",
+            target_os = "netbsd",
+            target_os = "openbsd"
+        )
+    ))]
+    fn set_clipboard_text(&self, text: String) -> Result<(), blitz_traits::shell::ClipboardError> {
+        let mut cb = arboard::Clipboard::new().unwrap();
+        cb.set_text(text.to_owned())
+            .map_err(|_| blitz_traits::shell::ClipboardError)
     }
 }

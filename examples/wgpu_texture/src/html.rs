@@ -1,17 +1,17 @@
-use std::sync::Arc;
-
-use anyrender_vello::VelloWindowRenderer;
-use blitz_dom::{local_name, ns, QualName};
+use anyrender_vello::{VelloRendererOptions, VelloWindowRenderer};
+use blitz_dom::{qual_name, DocumentConfig};
 use blitz_html::HtmlDocument;
-use blitz_shell::{create_default_event_loop, BlitzApplication, BlitzShellEvent, WindowConfig};
-use blitz_traits::{navigation::DummyNavigationProvider, net::DummyNetProvider};
+use blitz_shell::{create_default_event_loop, BlitzApplication, BlitzShellProxy, WindowConfig};
 
 use crate::{limits, DemoPaintSource, FEATURES, STYLES};
 
 pub fn launch_html() {
     // Create renderer
-    let mut renderer =
-        VelloWindowRenderer::with_features_and_limits(Some(FEATURES), Some(limits()));
+    let mut renderer = VelloWindowRenderer::with_options(VelloRendererOptions {
+        features: Some(FEATURES),
+        limits: Some(limits()),
+        ..VelloRendererOptions::default()
+    });
 
     // Create custom paint source and register it with the renderer
     let demo_paint_source = Box::new(DemoPaintSource::new());
@@ -19,31 +19,25 @@ pub fn launch_html() {
 
     // Parse the HTML into a Blitz document
     let html = HTML.replace("{{STYLES_PLACEHOLDER}}", STYLES);
-    let mut doc = HtmlDocument::from_html(
-        &html,
-        None,
-        Vec::new(),
-        Arc::new(DummyNetProvider),
-        None,
-        Arc::new(DummyNavigationProvider),
-    );
+    let mut doc = HtmlDocument::from_html(&html, DocumentConfig::default());
 
     // Set the "src" attribute on the `<canvas>` element to the paint source's id
     // (`<canvas src=".." />` is proprietary blitz extension to HTML)
     let canvas_node_id = doc.query_selector("#demo-canvas").unwrap().unwrap();
-    let src_attr = QualName::new(None, ns!(), local_name!("data"));
+    let src_attr = qual_name!("src");
     let src_str = paint_source_id.to_string();
     doc.mutate()
         .set_attribute(canvas_node_id, src_attr, &src_str);
 
     // Create the Winit application and window
-    let event_loop = create_default_event_loop::<BlitzShellEvent>();
-    let mut application = BlitzApplication::new(event_loop.create_proxy());
+    let event_loop = create_default_event_loop();
+    let (proxy, reciever) = BlitzShellProxy::new(event_loop.create_proxy());
+    let mut application = BlitzApplication::new(proxy, reciever);
     let window = WindowConfig::new(Box::new(doc), renderer);
     application.add_window(window);
 
     // Run event loop
-    event_loop.run_app(&mut application).unwrap()
+    event_loop.run_app(application).unwrap()
 }
 
 static HTML: &str = r#"

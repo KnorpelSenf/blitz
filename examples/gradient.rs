@@ -1,14 +1,13 @@
 use dioxus::prelude::*;
 
 fn main() {
-    mini_dxn::launch(app);
+    dioxus_native::launch(app);
 }
 
 fn app() -> Element {
     rsx! {
         style { {CSS} }
-        div {
-            class: "grid-container",
+        div { class: "grid-container",
             div { id: "a1" }
             div { id: "a2" }
             div { id: "a3" }

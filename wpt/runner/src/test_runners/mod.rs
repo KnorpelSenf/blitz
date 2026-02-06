@@ -1,8 +1,7 @@
 use std::{fs, sync::Arc, time::Instant};
 
-use blitz_dom::{BaseDocument, net::Resource};
+use blitz_dom::{BaseDocument, DocumentConfig};
 use blitz_html::HtmlDocument;
-use blitz_traits::net::SharedProvider;
 use log::info;
 
 use crate::{SubtestCounts, TestFlags, TestKind, TestStatus, ThreadCtx};
@@ -19,11 +18,16 @@ pub struct SubtestResult {
     pub errors: Vec<String>,
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn process_test_file(
     ctx: &mut ThreadCtx,
     relative_path: &str,
-) -> (TestKind, TestFlags, SubtestCounts, Vec<SubtestResult>) {
+) -> (
+    TestKind,
+    TestFlags,
+    TestStatus,
+    SubtestCounts,
+    Vec<SubtestResult>,
+) {
     info!("Processing test file: {relative_path}");
 
     let file_contents = fs::read_to_string(ctx.wpt_dir.join(relative_path)).unwrap();
@@ -69,7 +73,8 @@ pub fn process_test_file(
             &mut flags,
         );
 
-        return (TestKind::Ref, flags, counts, Vec::new());
+        let status = counts.as_status();
+        return (TestKind::Ref, flags, status, counts, Vec::new());
     }
 
     // Attr Test
@@ -78,21 +83,24 @@ pub fn process_test_file(
     let second = matches.next();
     if first.is_some() && second.is_none() {
         // TODO: handle tests with multiple calls to checkLayout.
+        #[allow(clippy::unnecessary_unwrap)]
         let captures = first.unwrap();
         let selector = captures.get(1).unwrap().as_str().to_string();
         drop(matches);
 
         println!("{selector}");
 
-        let (counts, results) = process_attr_test(ctx, &selector, &file_contents, relative_path);
+        let (status, counts, results) =
+            process_attr_test(ctx, &selector, &file_contents, relative_path);
 
-        return (TestKind::Attr, flags, counts, results);
+        return (TestKind::Attr, flags, status, counts, results);
     }
 
     // TODO: Handle other test formats.
     (
         TestKind::Unknown,
         flags,
+        TestStatus::Skip,
         SubtestCounts::ZERO_OF_ZERO,
         Vec::new(),
     )
@@ -106,23 +114,24 @@ fn parse_and_resolve_document(
     ctx.net_provider.reset();
     let mut document = HtmlDocument::from_html(
         html,
-        Some(ctx.dummy_base_url.join(relative_path).unwrap().to_string()),
-        Vec::new(),
-        Arc::clone(&ctx.net_provider) as SharedProvider<Resource>,
-        Some(ctx.font_ctx.clone()),
-        ctx.navigation_provider.clone(),
+        DocumentConfig {
+            base_url: Some(ctx.dummy_base_url.join(relative_path).unwrap().to_string()),
+            font_ctx: Some(ctx.font_ctx.clone()),
+            net_provider: Some(Arc::clone(&ctx.net_provider) as _),
+            navigation_provider: Some(Arc::clone(&ctx.navigation_provider)),
+            ..Default::default()
+        },
     );
 
     document.as_mut().set_viewport(ctx.viewport.clone());
-    document.as_mut().resolve();
+    document.as_mut().resolve(0.0);
 
     // Load resources.
     // Loop because loading a resource may result in further resources being requested
     let start = Instant::now();
     while ctx.net_provider.pending_item_count() > 0 {
-        ctx.net_provider
-            .for_each(|res| document.as_mut().load_resource(res));
-        document.as_mut().resolve();
+        ctx.net_provider.for_each(|_| {});
+        document.as_mut().resolve(0.0);
         if Instant::now().duration_since(start).as_millis() > 500 {
             ctx.net_provider.log_pending_items();
             panic!(
@@ -132,9 +141,7 @@ fn parse_and_resolve_document(
         }
     }
 
-    ctx.net_provider
-        .for_each(|res| document.as_mut().load_resource(res));
-    document.as_mut().resolve();
+    document.as_mut().resolve(0.0);
 
     document.into()
 }

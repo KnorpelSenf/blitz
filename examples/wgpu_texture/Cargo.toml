@@ -9,14 +9,14 @@ license = "MIT"
 publish = false
 
 [dependencies]
-anyrender = { path = "../../packages/anyrender" }
-anyrender_vello = { path = "../../packages/anyrender_vello" }
-blitz-traits = { path = "../../packages/blitz-traits" }
-blitz-dom = { path = "../../packages/blitz-dom" }
-blitz-html = { path = "../../packages/blitz-html" }
-blitz-shell = { path = "../../packages/blitz-shell" }
-mini-dxn = { path = "../../packages/mini-dxn" }
-dioxus = { workspace = true }
+anyrender = { workspace = true }
+anyrender_vello = { workspace = true }
+blitz-traits = { workspace = true}
+blitz-dom = { workspace = true, features = ["tracing"]}
+blitz-html = { workspace = true }
+blitz-shell = { workspace = true, features = ["tracing"] }
+dioxus-native = { workspace = true, features = ["vello", "system-fonts", "prelude"] }
+wgpu_context = { workspace = true }
 wgpu = { workspace = true }
 color = { workspace = true }
 bytemuck = { workspace = true }

@@ -1,4 +1,7 @@
-use taffy::{BoxSizing, CoreStyle as _, MaybeMath, MaybeResolve, ResolveOrZero as _, Size};
+use style::Atom;
+use taffy::{
+    AvailableSpace, BoxSizing, CoreStyle as _, MaybeMath, MaybeResolve, ResolveOrZero as _, Size,
+};
 
 use crate::layout::resolve_calc_value;
 
@@ -23,8 +26,9 @@ enum Violation {
 pub fn replaced_measure_function(
     known_dimensions: taffy::Size<Option<f32>>,
     parent_size: taffy::Size<Option<f32>>,
+    available_space: taffy::Size<AvailableSpace>,
     image_context: &ReplacedContext,
-    style: &taffy::Style,
+    style: &taffy::Style<Atom>,
     _debug: bool,
 ) -> taffy::Size<f32> {
     let inherent_size = image_context.inherent_size;
@@ -51,10 +55,24 @@ pub fn replaced_measure_function(
     let aspect_ratio = s_aspect_ratio.unwrap_or_else(|| inherent_size.width / inherent_size.height);
     let inv_aspect_ratio = 1.0 / aspect_ratio;
 
+    // See https://www.w3.org/TR/css-sizing-3/#replaced-percentage-min-contribution
+    let basis_for_max_and_preferred = Size {
+        width: if available_space.width == AvailableSpace::MinContent {
+            Some(0.0)
+        } else {
+            parent_size.width
+        },
+        height: if available_space.height == AvailableSpace::MinContent {
+            Some(0.0)
+        } else {
+            parent_size.height
+        },
+    };
+
     // Resolve sizes
     let style_size = style
         .size
-        .maybe_resolve(parent_size, resolve_calc_value)
+        .maybe_resolve(basis_for_max_and_preferred, resolve_calc_value)
         .maybe_apply_aspect_ratio(Some(aspect_ratio))
         .maybe_sub(box_sizing_adjustment);
     let min_size = style
@@ -63,37 +81,34 @@ pub fn replaced_measure_function(
         .maybe_sub(box_sizing_adjustment);
     let max_size = style
         .max_size
-        .maybe_resolve(parent_size, resolve_calc_value)
+        .maybe_resolve(basis_for_max_and_preferred, resolve_calc_value)
+        .or(available_space.into_options())
+        .maybe_min(available_space.into_options())
         .maybe_max(min_size)
         .maybe_sub(box_sizing_adjustment);
     let attr_size = image_context.attr_size;
 
     let unclamped_size = 'size: {
         if known_dimensions.width.is_some() | known_dimensions.height.is_some() {
-            break 'size known_dimensions
+            let content_box_known_dimensions = known_dimensions.maybe_sub(pb_sum);
+            break 'size content_box_known_dimensions
                 .maybe_apply_aspect_ratio(Some(aspect_ratio))
                 .map(|s| s.unwrap());
         }
 
         if style_size.width.is_some() | style_size.height.is_some() {
             break 'size style_size
-                // .maybe_clamp(min_size, max_size)
                 .maybe_apply_aspect_ratio(Some(aspect_ratio))
                 .map(|s| s.unwrap());
         }
 
         if attr_size.width.is_some() | attr_size.height.is_some() {
             break 'size attr_size
-                // .maybe_clamp(min_size, max_size)
                 .maybe_apply_aspect_ratio(Some(aspect_ratio))
                 .map(|s| s.unwrap());
         }
 
         inherent_size
-            // .maybe_clamp(min_size, max_size)
-            .map(Some)
-            .maybe_apply_aspect_ratio(Some(aspect_ratio))
-            .map(|s| s.unwrap())
     };
 
     // Floor size at zero

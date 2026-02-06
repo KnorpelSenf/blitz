@@ -3,7 +3,8 @@ use crate::{
     node::{TextBrush, TextInputData},
 };
 use blitz_traits::{
-    BlitzKeyEvent, DomEvent, DomEventData, events::BlitzInputEvent, shell::ShellProvider,
+    events::{BlitzInputEvent, BlitzKeyEvent, DomEvent, DomEventData},
+    shell::ShellProvider,
 };
 use keyboard_types::{Key, Modifiers};
 use markup5ever::local_name;
@@ -12,6 +13,7 @@ use parley::{FontContext, LayoutContext};
 // TODO: support keypress events
 enum GeneratedEvent {
     Input,
+    Select,
     Submit,
 }
 
@@ -24,6 +26,30 @@ pub(crate) fn handle_keypress<F: FnMut(DomEvent)>(
     if event.key == Key::Tab {
         doc.focus_next_node();
         return;
+    }
+
+    // Handle copy (Ctrl+C/Cmd+C) for text selection when no text input is focused
+    if event.state.is_pressed() {
+        let action_mod = event.modifiers.contains(ACTION_MOD);
+        if action_mod {
+            if let Key::Character(c) = &event.key {
+                if c.to_lowercase() == "c" {
+                    // Check if we have a text selection (and no focused text input)
+                    let has_focused_text_input = doc.focus_node_id.is_some_and(|id| {
+                        doc.get_node(id)
+                            .and_then(|n| n.element_data())
+                            .is_some_and(|e| e.text_input_data().is_some())
+                    });
+
+                    if !has_focused_text_input {
+                        if let Some(text) = doc.get_selected_text() {
+                            let _ = doc.shell_provider.set_clipboard_text(text);
+                            return;
+                        }
+                    }
+                }
+            }
+        }
     }
 
     if let Some(node_id) = doc.focus_node_id {
@@ -39,7 +65,7 @@ pub(crate) fn handle_keypress<F: FnMut(DomEvent)>(
         if let Some(input_data) = element_data.text_input_data_mut() {
             let generated_event = apply_keypress_event(
                 input_data,
-                &mut doc.font_ctx,
+                &mut doc.font_ctx.lock().unwrap(),
                 &mut doc.layout_ctx,
                 &*doc.shell_provider,
                 event,
@@ -53,6 +79,10 @@ pub(crate) fn handle_keypress<F: FnMut(DomEvent)>(
                             node_id,
                             DomEventData::Input(BlitzInputEvent { value }),
                         ));
+                        doc.shell_provider.request_redraw();
+                    }
+                    GeneratedEvent::Select => {
+                        doc.shell_provider.request_redraw();
                     }
                     GeneratedEvent::Submit => {
                         // TODO: Generate submit event that can be handled by script
@@ -117,6 +147,7 @@ fn apply_keypress_event(
             } else {
                 driver.select_all()
             }
+            return Some(GeneratedEvent::Select);
         }
         Key::ArrowLeft => {
             if action_mod {
@@ -130,6 +161,7 @@ fn apply_keypress_event(
             } else {
                 driver.move_left()
             }
+            return Some(GeneratedEvent::Select);
         }
         Key::ArrowRight => {
             if action_mod {
@@ -143,6 +175,7 @@ fn apply_keypress_event(
             } else {
                 driver.move_right()
             }
+            return Some(GeneratedEvent::Select);
         }
         Key::ArrowUp => {
             if shift {
@@ -150,6 +183,7 @@ fn apply_keypress_event(
             } else {
                 driver.move_up()
             }
+            return Some(GeneratedEvent::Select);
         }
         Key::ArrowDown => {
             if shift {
@@ -157,6 +191,7 @@ fn apply_keypress_event(
             } else {
                 driver.move_down()
             }
+            return Some(GeneratedEvent::Select);
         }
         Key::Home => {
             if action_mod {
@@ -170,6 +205,7 @@ fn apply_keypress_event(
             } else {
                 driver.move_to_line_start()
             }
+            return Some(GeneratedEvent::Select);
         }
         Key::End => {
             if action_mod {
@@ -183,6 +219,7 @@ fn apply_keypress_event(
             } else {
                 driver.move_to_line_end()
             }
+            return Some(GeneratedEvent::Select);
         }
         Key::Delete => {
             if action_mod {
@@ -200,9 +237,18 @@ fn apply_keypress_event(
             }
             return Some(GeneratedEvent::Input);
         }
+        Key::Character(c) if c == "\n" => {
+            if is_multiline {
+                driver.insert_or_replace_selection("\n");
+                return Some(GeneratedEvent::Input);
+            } else {
+                return Some(GeneratedEvent::Submit);
+            }
+        }
         Key::Enter => {
             if is_multiline {
                 driver.insert_or_replace_selection("\n");
+                return Some(GeneratedEvent::Input);
             } else {
                 return Some(GeneratedEvent::Submit);
             }

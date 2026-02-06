@@ -1,3 +1,7 @@
+//! Types to represent UI and DOM events
+
+use std::str::FromStr;
+
 use bitflags::bitflags;
 use keyboard_types::{Code, Key, Location, Modifiers};
 use smol_str::SmolStr;
@@ -38,16 +42,36 @@ impl EventState {
     pub fn redraw_is_requested(&self) -> bool {
         self.redraw_requested
     }
+
+    #[inline]
+    pub fn merge(&self, other: &EventState) -> EventState {
+        EventState {
+            cancelled: self.cancelled | other.cancelled,
+            propagation_stopped: self.propagation_stopped | other.propagation_stopped,
+            redraw_requested: self.redraw_requested | other.redraw_requested,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
+#[repr(u8)]
 pub enum UiEvent {
-    MouseMove(BlitzMouseButtonEvent),
-    MouseUp(BlitzMouseButtonEvent),
-    MouseDown(BlitzMouseButtonEvent),
+    PointerMove(BlitzPointerEvent),
+    PointerUp(BlitzPointerEvent),
+    PointerDown(BlitzPointerEvent),
+    Wheel(BlitzWheelEvent),
     KeyUp(BlitzKeyEvent),
     KeyDown(BlitzKeyEvent),
     Ime(BlitzImeEvent),
+}
+impl UiEvent {
+    pub fn discriminant(&self) -> u8 {
+        // SAFETY: Because `Self` is marked `repr(u8)`, its layout is a `repr(C)` `union`
+        // between `repr(C)` structs, each of which has the `u8` discriminant as its first
+        // field, so we can read the discriminant without offsetting the pointer.
+        // See: https://doc.rust-lang.org/stable/std/mem/fn.discriminant.html#accessing-the-numeric-value-of-the-discriminant
+        unsafe { *<*const _>::from(self).cast::<u8>() }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -79,59 +103,287 @@ impl DomEvent {
     }
 }
 
+#[derive(Copy, Clone, Debug, PartialEq)]
+#[repr(u8)]
+pub enum DomEventKind {
+    PointerMove,
+    PointerDown,
+    PointerUp,
+    PointerEnter,
+    PointerLeave,
+    PointerOver,
+    PointerOut,
+
+    MouseMove,
+    MouseDown,
+    MouseUp,
+    MouseEnter,
+    MouseLeave,
+    MouseOver,
+    MouseOut,
+
+    Scroll,
+    Wheel,
+
+    Click,
+    ContextMenu,
+    DoubleClick,
+
+    KeyPress,
+    KeyDown,
+    KeyUp,
+    Input,
+    Ime,
+
+    Focus,
+    Blur,
+    FocusIn,
+    FocusOut,
+}
+impl DomEventKind {
+    pub fn discriminant(self) -> u8 {
+        self as u8
+    }
+}
+impl FromStr for DomEventKind {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, ()> {
+        match s.trim_start_matches("on") {
+            "pointermove" => Ok(Self::PointerMove),
+            "pointerdown" => Ok(Self::PointerDown),
+            "pointerup" => Ok(Self::PointerUp),
+            "pointerenter" => Ok(Self::PointerEnter),
+            "pointerleave" => Ok(Self::PointerLeave),
+            "pointerover" => Ok(Self::PointerOver),
+            "pointerout" => Ok(Self::PointerOut),
+
+            "mousemove" => Ok(Self::MouseMove),
+            "mousedown" => Ok(Self::MouseDown),
+            "mouseup" => Ok(Self::MouseUp),
+            "mouseenter" => Ok(Self::MouseEnter),
+            "mouseleave" => Ok(Self::MouseLeave),
+            "mouseover" => Ok(Self::MouseOver),
+            "mouseout" => Ok(Self::MouseOut),
+
+            "scroll" => Ok(Self::Scroll),
+            "wheel" => Ok(Self::Wheel),
+
+            "click" => Ok(Self::Click),
+            "contextmenu" => Ok(Self::ContextMenu),
+            "dblclick" => Ok(Self::DoubleClick),
+
+            "keypress" => Ok(Self::KeyPress),
+            "keydown" => Ok(Self::KeyDown),
+            "keyup" => Ok(Self::KeyUp),
+            "input" => Ok(Self::Input),
+            "composition" => Ok(Self::Ime),
+
+            "focus" => Ok(Self::Focus),
+            "blur" => Ok(Self::Blur),
+            "focusin" => Ok(Self::FocusIn),
+            "focusout" => Ok(Self::FocusOut),
+            _ => Err(()),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
+#[repr(u8)]
 pub enum DomEventData {
-    MouseMove(BlitzMouseButtonEvent),
-    MouseDown(BlitzMouseButtonEvent),
-    MouseUp(BlitzMouseButtonEvent),
-    Click(BlitzMouseButtonEvent),
+    PointerMove(BlitzPointerEvent),
+    PointerDown(BlitzPointerEvent),
+    PointerUp(BlitzPointerEvent),
+    PointerEnter(BlitzPointerEvent),
+    PointerLeave(BlitzPointerEvent),
+    PointerOver(BlitzPointerEvent),
+    PointerOut(BlitzPointerEvent),
+
+    MouseMove(BlitzPointerEvent),
+    MouseDown(BlitzPointerEvent),
+    MouseUp(BlitzPointerEvent),
+    MouseEnter(BlitzPointerEvent),
+    MouseLeave(BlitzPointerEvent),
+    MouseOver(BlitzPointerEvent),
+    MouseOut(BlitzPointerEvent),
+
+    Scroll(BlitzScrollEvent),
+    Wheel(BlitzWheelEvent),
+
+    Click(BlitzPointerEvent),
+    ContextMenu(BlitzPointerEvent),
+    DoubleClick(BlitzPointerEvent),
+
     KeyPress(BlitzKeyEvent),
     KeyDown(BlitzKeyEvent),
     KeyUp(BlitzKeyEvent),
     Input(BlitzInputEvent),
     Ime(BlitzImeEvent),
+
+    Focus(BlitzFocusEvent),
+    Blur(BlitzFocusEvent),
+    FocusIn(BlitzFocusEvent),
+    FocusOut(BlitzFocusEvent),
+}
+impl DomEventData {
+    pub fn discriminant(&self) -> u8 {
+        // SAFETY: Because `Self` is marked `repr(u8)`, its layout is a `repr(C)` `union`
+        // between `repr(C)` structs, each of which has the `u8` discriminant as its first
+        // field, so we can read the discriminant without offsetting the pointer.
+        // See: https://doc.rust-lang.org/stable/std/mem/fn.discriminant.html#accessing-the-numeric-value-of-the-discriminant
+        unsafe { *<*const _>::from(self).cast::<u8>() }
+    }
 }
 
 impl DomEventData {
     pub fn name(&self) -> &'static str {
         match self {
+            Self::PointerMove { .. } => "pointermove",
+            Self::PointerDown { .. } => "pointerdown",
+            Self::PointerUp { .. } => "pointerup",
+            Self::PointerEnter { .. } => "pointerenter",
+            Self::PointerLeave { .. } => "pointerleave",
+            Self::PointerOver { .. } => "pointerover",
+            Self::PointerOut { .. } => "pointerout",
+
             Self::MouseMove { .. } => "mousemove",
             Self::MouseDown { .. } => "mousedown",
             Self::MouseUp { .. } => "mouseup",
+            Self::MouseEnter { .. } => "mouseenter",
+            Self::MouseLeave { .. } => "mouseleave",
+            Self::MouseOver { .. } => "mouseover",
+            Self::MouseOut { .. } => "mouseout",
+
+            Self::Scroll { .. } => "scroll",
+            Self::Wheel { .. } => "wheel",
+
             Self::Click { .. } => "click",
+            Self::ContextMenu { .. } => "contextmenu",
+            Self::DoubleClick { .. } => "dblclick",
+
             Self::KeyPress { .. } => "keypress",
             Self::KeyDown { .. } => "keydown",
             Self::KeyUp { .. } => "keyup",
-            Self::Ime { .. } => "composition",
             Self::Input { .. } => "input",
+            Self::Ime { .. } => "composition",
+
+            Self::Focus { .. } => "focus",
+            Self::Blur { .. } => "blur",
+            Self::FocusIn { .. } => "focusin",
+            Self::FocusOut { .. } => "focusout",
+        }
+    }
+
+    pub fn kind(&self) -> DomEventKind {
+        match self {
+            Self::PointerMove { .. } => DomEventKind::PointerMove,
+            Self::PointerDown { .. } => DomEventKind::PointerDown,
+            Self::PointerUp { .. } => DomEventKind::PointerUp,
+            Self::PointerEnter { .. } => DomEventKind::PointerEnter,
+            Self::PointerLeave { .. } => DomEventKind::PointerLeave,
+            Self::PointerOver { .. } => DomEventKind::PointerOver,
+            Self::PointerOut { .. } => DomEventKind::PointerOut,
+
+            Self::MouseMove { .. } => DomEventKind::MouseMove,
+            Self::MouseDown { .. } => DomEventKind::MouseDown,
+            Self::MouseUp { .. } => DomEventKind::MouseUp,
+            Self::MouseEnter { .. } => DomEventKind::MouseEnter,
+            Self::MouseLeave { .. } => DomEventKind::MouseLeave,
+            Self::MouseOver { .. } => DomEventKind::MouseOver,
+            Self::MouseOut { .. } => DomEventKind::MouseOut,
+
+            Self::Scroll { .. } => DomEventKind::Scroll,
+            Self::Wheel { .. } => DomEventKind::Wheel,
+
+            Self::Click { .. } => DomEventKind::Click,
+            Self::ContextMenu { .. } => DomEventKind::ContextMenu,
+            Self::DoubleClick { .. } => DomEventKind::DoubleClick,
+
+            Self::KeyPress { .. } => DomEventKind::KeyPress,
+            Self::KeyDown { .. } => DomEventKind::KeyDown,
+            Self::KeyUp { .. } => DomEventKind::KeyUp,
+            Self::Input { .. } => DomEventKind::Input,
+            Self::Ime { .. } => DomEventKind::Ime,
+
+            Self::Focus { .. } => DomEventKind::Focus,
+            Self::Blur { .. } => DomEventKind::Blur,
+            Self::FocusIn { .. } => DomEventKind::FocusIn,
+            Self::FocusOut { .. } => DomEventKind::FocusOut,
         }
     }
 
     pub fn cancelable(&self) -> bool {
         match self {
+            Self::PointerMove { .. } => true,
+            Self::PointerDown { .. } => true,
+            Self::PointerUp { .. } => true,
+            Self::PointerEnter { .. } => false,
+            Self::PointerLeave { .. } => false,
+            Self::PointerOver { .. } => true,
+            Self::PointerOut { .. } => true,
+
             Self::MouseMove { .. } => true,
             Self::MouseDown { .. } => true,
             Self::MouseUp { .. } => true,
+            Self::MouseEnter { .. } => false,
+            Self::MouseLeave { .. } => false,
+            Self::MouseOver { .. } => true,
+            Self::MouseOut { .. } => true,
+
+            Self::Scroll { .. } => false,
+            Self::Wheel { .. } => true,
+
             Self::Click { .. } => true,
+            Self::ContextMenu { .. } => true,
+            Self::DoubleClick { .. } => true,
+
             Self::KeyDown { .. } => true,
             Self::KeyUp { .. } => true,
             Self::KeyPress { .. } => true,
             Self::Ime { .. } => true,
             Self::Input { .. } => false,
+
+            Self::Focus { .. } => false,
+            Self::Blur { .. } => false,
+            Self::FocusIn { .. } => false,
+            Self::FocusOut { .. } => false,
         }
     }
 
     pub fn bubbles(&self) -> bool {
         match self {
+            Self::PointerMove { .. } => true,
+            Self::PointerDown { .. } => true,
+            Self::PointerUp { .. } => true,
+            Self::PointerEnter { .. } => false,
+            Self::PointerLeave { .. } => false,
+            Self::PointerOver { .. } => true,
+            Self::PointerOut { .. } => true,
+
             Self::MouseMove { .. } => true,
             Self::MouseDown { .. } => true,
             Self::MouseUp { .. } => true,
+            Self::MouseEnter { .. } => false,
+            Self::MouseLeave { .. } => false,
+            Self::MouseOver { .. } => true,
+            Self::MouseOut { .. } => true,
+
+            Self::Scroll { .. } => false,
+            Self::Wheel { .. } => true,
+
             Self::Click { .. } => true,
+            Self::ContextMenu { .. } => true,
+            Self::DoubleClick { .. } => true,
+
             Self::KeyDown { .. } => true,
             Self::KeyUp { .. } => true,
             Self::KeyPress { .. } => true,
             Self::Ime { .. } => true,
             Self::Input { .. } => true,
+
+            Self::Focus { .. } => false,
+            Self::Blur { .. } => false,
+            Self::FocusIn { .. } => true,
+            Self::FocusOut { .. } => true,
         }
     }
 }
@@ -140,20 +392,157 @@ impl DomEventData {
 pub struct HitResult {
     /// The node_id of the node identified as the hit target
     pub node_id: usize,
+    /// Whether the hit content is text
+    pub is_text: bool,
     /// The x coordinate of the hit within the hit target's border-box
     pub x: f32,
     /// The y coordinate of the hit within the hit target's border-box
     pub y: f32,
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum BlitzPointerId {
+    Mouse,
+    Pen,
+    Finger(u64),
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct PointerCoords {
+    pub page_x: f32,
+    pub page_y: f32,
+    pub screen_x: f32,
+    pub screen_y: f32,
+    pub client_x: f32,
+    pub client_y: f32,
+}
+
+#[derive(Copy, Clone, Debug, Default)]
+pub struct PointerDetails {
+    pub pressure: f64, // default 0.5 if buttons pressed else 0.0
+    pub tangential_pressure: f32,
+    pub tilt_x: i8,
+    pub tilt_y: i8,
+    pub twist: u16,
+    pub altitude: f64,
+    pub azimuth: f64,
+}
+
 #[derive(Clone, Debug)]
-pub struct BlitzMouseButtonEvent {
-    pub x: f32,
-    pub y: f32,
+pub struct BlitzPointerEvent {
+    pub id: BlitzPointerId,
+    pub is_primary: bool,
+    pub coords: PointerCoords,
     pub button: MouseEventButton,
     pub buttons: MouseEventButtons,
     pub mods: Modifiers,
+    pub details: PointerDetails,
 }
+
+impl BlitzPointerEvent {
+    #[inline(always)]
+    pub fn is_mouse(&self) -> bool {
+        matches!(self.id, BlitzPointerId::Mouse)
+    }
+    #[inline(always)]
+    pub fn is_pen(&self) -> bool {
+        matches!(self.id, BlitzPointerId::Pen)
+    }
+    #[inline(always)]
+    pub fn is_finger(&self) -> bool {
+        matches!(self.id, BlitzPointerId::Finger(_))
+    }
+
+    #[inline(always)]
+    pub fn page_x(&self) -> f32 {
+        self.coords.page_x
+    }
+    #[inline(always)]
+    pub fn page_y(&self) -> f32 {
+        self.coords.page_y
+    }
+    #[inline(always)]
+    pub fn client_x(&self) -> f32 {
+        self.coords.client_x
+    }
+    #[inline(always)]
+    pub fn client_y(&self) -> f32 {
+        self.coords.client_y
+    }
+    #[inline(always)]
+    pub fn screen_x(&self) -> f32 {
+        self.coords.screen_x
+    }
+    #[inline(always)]
+    pub fn screen_y(&self) -> f32 {
+        self.coords.screen_y
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum BlitzWheelDelta {
+    Lines(f64, f64),
+    Pixels(f64, f64),
+}
+
+#[derive(Clone, Debug)]
+pub struct BlitzWheelEvent {
+    pub delta: BlitzWheelDelta,
+    pub coords: PointerCoords,
+    pub buttons: MouseEventButtons,
+    pub mods: Modifiers,
+}
+
+impl BlitzWheelEvent {
+    #[inline(always)]
+    pub fn page_x(&self) -> f32 {
+        self.coords.page_x
+    }
+    #[inline(always)]
+    pub fn page_y(&self) -> f32 {
+        self.coords.page_y
+    }
+    #[inline(always)]
+    pub fn client_x(&self) -> f32 {
+        self.coords.client_x
+    }
+    #[inline(always)]
+    pub fn client_y(&self) -> f32 {
+        self.coords.client_y
+    }
+    #[inline(always)]
+    pub fn screen_x(&self) -> f32 {
+        self.coords.screen_x
+    }
+    #[inline(always)]
+    pub fn screen_y(&self) -> f32 {
+        self.coords.screen_y
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct BlitzScrollEvent {
+    pub scroll_top: f64,
+    pub scroll_left: f64,
+    pub scroll_width: i32,
+    pub scroll_height: i32,
+    pub client_width: i32,
+    pub client_height: i32,
+}
+
+// struct PointerInputState {
+//     id: BlitzPointerId,
+//     pointer_down_x: f32,
+//     pointer_down_y: f32,
+//     pointer_down_time: Option<Instant>,
+//     click_count: u16,
+// }
+
+// struct PointersInputState {
+//     initial_finger_active: bool,
+//     mouse: Option<PointerInputState>,
+//     fingers: Vec<PointerInputState>,
+// }
 
 bitflags! {
     /// The buttons property indicates which buttons are pressed on the mouse
@@ -243,6 +632,9 @@ pub struct BlitzInputEvent {
     pub value: String,
 }
 
+#[derive(Clone, Debug)]
+pub struct BlitzFocusEvent;
+
 /// Copy of Winit IME event to avoid lower-level Blitz crates depending on winit
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum BlitzImeEvent {
@@ -259,13 +651,27 @@ pub enum BlitzImeEvent {
     /// position. When it's `None`, the cursor should be hidden. When `String` is an empty string
     /// this indicates that preedit was cleared.
     ///
-    /// The cursor position is byte-wise indexed.
+    /// The cursor position is byte-wise indexed, assuming UTF-8.
     Preedit(String, Option<(usize, usize)>),
 
     /// Notifies when text should be inserted into the editor widget.
     ///
     /// Right before this event winit will send empty [`Self::Preedit`] event.
     Commit(String),
+
+    /// Delete text surrounding the cursor or selection.
+    ///
+    /// This event does not affect either the pre-edit string.
+    /// This means that the application must first remove the pre-edit,
+    /// then execute the deletion, then insert the removed text back.
+    ///
+    /// This event assumes text is stored in UTF-8.
+    DeleteSurrounding {
+        /// Bytes to remove before the selection
+        before_bytes: usize,
+        /// Bytes to remove after the selection
+        after_bytes: usize,
+    },
 
     /// Notifies when the IME was disabled.
     ///

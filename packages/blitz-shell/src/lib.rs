@@ -1,6 +1,6 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
-//! A native renderer for Dioxus.
+//! Event loop, windowing and system integration.
 //!
 //! ## Feature flags
 //!  - `default`: Enables the features listed below.
@@ -11,21 +11,39 @@
 mod application;
 mod convert_events;
 mod event;
+mod net;
 mod window;
 
 #[cfg(feature = "accessibility")]
 mod accessibility;
 
 pub use crate::application::BlitzApplication;
-pub use crate::event::BlitzShellEvent;
+pub use crate::event::{BlitzShellEvent, BlitzShellProxy};
 pub use crate::window::{View, WindowConfig};
 
-use blitz_dom::net::Resource;
-use blitz_traits::net::NetCallback;
+#[cfg(feature = "data-uri")]
+pub use crate::net::DataUriNetProvider;
+
+#[cfg(all(
+    feature = "file_dialog",
+    any(
+        target_os = "windows",
+        target_os = "macos",
+        target_os = "linux",
+        target_os = "dragonfly",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    )
+))]
+use blitz_traits::shell::FileDialogFilter;
 use blitz_traits::shell::ShellProvider;
 use std::sync::Arc;
-use winit::event_loop::{ControlFlow, EventLoop, EventLoopProxy};
-use winit::window::{CursorIcon, Window};
+use winit::cursor::{Cursor, CursorIcon};
+use winit::dpi::{LogicalPosition, LogicalSize};
+pub use winit::event_loop::{ControlFlow, EventLoop, EventLoopProxy};
+pub use winit::window::Window;
+use winit::window::{ImeCapabilities, ImeEnableRequest, ImeRequest, ImeRequestData};
 
 #[derive(Default)]
 pub struct Config {
@@ -34,8 +52,8 @@ pub struct Config {
 }
 
 /// Build an event loop for the application
-pub fn create_default_event_loop<Event>() -> EventLoop<Event> {
-    let mut ev_builder = EventLoop::<Event>::with_user_event();
+pub fn create_default_event_loop() -> EventLoop {
+    let mut ev_builder = EventLoop::builder();
     #[cfg(target_os = "android")]
     {
         use winit::platform::android::EventLoopBuilderExtAndroid;
@@ -66,34 +84,11 @@ pub fn current_android_app() -> android_activity::AndroidApp {
     ANDROID_APP.get().unwrap().clone()
 }
 
-/// A NetCallback that injects the fetched Resource into our winit event loop
-pub struct BlitzShellNetCallback(EventLoopProxy<BlitzShellEvent>);
-
-impl BlitzShellNetCallback {
-    pub fn new(proxy: EventLoopProxy<BlitzShellEvent>) -> Self {
-        Self(proxy)
-    }
-
-    pub fn shared(proxy: EventLoopProxy<BlitzShellEvent>) -> Arc<dyn NetCallback<Resource>> {
-        Arc::new(Self(proxy))
-    }
-}
-impl NetCallback<Resource> for BlitzShellNetCallback {
-    fn call(&self, doc_id: usize, result: Result<Resource, Option<String>>) {
-        // TODO: handle error case
-        if let Ok(data) = result {
-            self.0
-                .send_event(BlitzShellEvent::ResourceLoad { doc_id, data })
-                .unwrap()
-        }
-    }
-}
-
 pub struct BlitzShellProvider {
-    window: Arc<Window>,
+    window: Arc<dyn Window>,
 }
 impl BlitzShellProvider {
-    pub fn new(window: Arc<Window>) -> Self {
+    pub fn new(window: Arc<dyn Window>) -> Self {
         Self { window }
     }
 }
@@ -103,10 +98,27 @@ impl ShellProvider for BlitzShellProvider {
         self.window.request_redraw();
     }
     fn set_cursor(&self, icon: CursorIcon) {
-        self.window.set_cursor(icon);
+        self.window.set_cursor(Cursor::Icon(icon));
     }
     fn set_window_title(&self, title: String) {
         self.window.set_title(&title);
+    }
+    fn set_ime_enabled(&self, is_enabled: bool) {
+        if is_enabled {
+            let _ = self.window.request_ime_update(ImeRequest::Enable(
+                ImeEnableRequest::new(ImeCapabilities::new(), ImeRequestData::default()).unwrap(),
+            ));
+        } else {
+            let _ = self.window.request_ime_update(ImeRequest::Disable);
+        }
+    }
+    fn set_ime_cursor_area(&self, x: f32, y: f32, width: f32, height: f32) {
+        let _ = self.window.request_ime_update(ImeRequest::Update(
+            ImeRequestData::default().with_cursor_area(
+                LogicalPosition::new(x, y).into(),
+                LogicalSize::new(width, height).into(),
+            ),
+        ));
     }
 
     #[cfg(all(
@@ -143,5 +155,34 @@ impl ShellProvider for BlitzShellProvider {
         let mut cb = arboard::Clipboard::new().unwrap();
         cb.set_text(text.to_owned())
             .map_err(|_| blitz_traits::shell::ClipboardError)
+    }
+
+    #[cfg(all(
+        feature = "file_dialog",
+        any(
+            target_os = "windows",
+            target_os = "macos",
+            target_os = "linux",
+            target_os = "dragonfly",
+            target_os = "freebsd",
+            target_os = "netbsd",
+            target_os = "openbsd"
+        )
+    ))]
+    fn open_file_dialog(
+        &self,
+        multiple: bool,
+        filter: Option<FileDialogFilter>,
+    ) -> Vec<std::path::PathBuf> {
+        let mut dialog = rfd::FileDialog::new();
+        if let Some(FileDialogFilter { name, extensions }) = filter {
+            dialog = dialog.add_filter(&name, &extensions);
+        }
+        let files = if multiple {
+            dialog.pick_files()
+        } else {
+            dialog.pick_file().map(|file| vec![file])
+        };
+        files.unwrap_or_default()
     }
 }

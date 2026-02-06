@@ -9,7 +9,7 @@ fn main() {
         .unwrap();
     let _guard = rt.enter();
 
-    mini_dxn::launch(app);
+    dioxus_native::launch(app);
 }
 
 #[derive(Copy, Clone)]
@@ -59,17 +59,13 @@ fn app() -> Element {
     });
     rsx! {
         div {
-            style { { STYLES } }
+            style { {STYLES} }
             h1 { "Current size: {size}" }
-            div {
-                style: "display: flex",
-                div { class: "button", onclick: move |_| running.toggle(), "Start/Stop"}
+            div { style: "display: flex",
+                div { class: "button", onclick: move |_| running.toggle(), "Start/Stop" }
                 div { class: "button", onclick: move |_| size.set(12), "Reset the size" }
             }
-            p {
-                style: "font-size: {size}px",
-                "Animate Font Size"
-            }
+            p { style: "font-size: {size}px", "Animate Font Size" }
         }
     }
 }

@@ -34,14 +34,14 @@ Original README below.
 [![Build Status](https://github.com/dioxuslabs/blitz/actions/workflows/ci.yml/badge.svg)](https://github.com/dioxuslabs/blitz/actions)
 [![Crates.io](https://img.shields.io/crates/v/blitz.svg)](https://crates.io/crates/blitz)
 [![Docs](https://docs.rs/blitz/badge.svg)](https://docs.rs/blitz)
-![Crates.io License](https://img.shields.io/crates/l/blitz)
+[![Crates.io License](https://img.shields.io/crates/l/blitz)](#license)
 [![dependency status](https://deps.rs/repo/github/dioxuslabs/blitz/status.svg)](https://deps.rs/repo/github/dioxuslabs/blitz)
 
 Talk to us in: the [#native](https://discord.gg/AnNPqT95pu) channel in the [Dioxus Discord](https://discord.gg/AnNPqT95pu)
 
 ## Status
 
-Blitz is currently in a **pre-alpha** state. It already has a very capable renderer, but there are also still many bugs and missing features. We are actively working on bringing into a usable state but we would not yet recommend building apps with it.
+Blitz is currently in a **pre-alpha** state. It already has a very capable renderer, but there are also still many bugs and missing features. We are actively working on bringing it into a usable state but we would not yet recommend building apps with it.
 
 Check out the [roadmap issue](https://github.com/DioxusLabs/blitz/issues/119) for more details. 
 
@@ -49,25 +49,34 @@ Check out the [roadmap issue](https://github.com/DioxusLabs/blitz/issues/119) fo
 
 ![screenshot](https://raw.githubusercontent.com/DioxusLabs/screenshots/main/blitz/counter-example.png)
 
-
 > Note: This repo contains a new version of Blitz (v0.2+) which uses Stylo. The source code for the old version (v0.1) is still available on the [legacy](https://github.com/DioxusLabs/blitz/tree/legacy) branch but is not under active development.
-
 
 ## Trying it out
 
 1. Clone this repo
-2. Run an example:
-    - `cargo run --release --example todomvc`
-    - `cargo run --release --example google`
-3. Or our "browser" package:
-    - `cargo run --release --package readme ./README.md`
-    - `cargo run --release --package readme https://news.ycombinator.com`
+2. Run our "browser" package:
+    ```sh
+    cargo run --release --package browser
+    ```
+3. Or run an example:
+    - small TODO app
+    ```sh
+    cargo run --release --package todomvc
+    ```
+    - markdown renderer
+    ```sh
+    cargo run --release --package readme ./README.md
+    ```
+    - integration with raw WGPU rendering
+    ```sh
+    cargo run --release --package wgpu_texture
+    ```
 
-Other examples available.
+Other examples are available in the [examples/](./examples/) folder.
 
 ## Goals
 
-Blitz is designed to render HTML and CSS - we *don't* want to support the entirety of browser features (or at least we want to make all such "extra" features opt-in). In our opinion, the browser is bloated for the basic usecase of rendering HTML/CSS.
+Blitz is designed to render HTML and CSS - we *don't* want to support the entirety of browser features (or at least we want to make all such "extra" features opt-in). In our opinion, the browser is bloated for the basic use case of rendering HTML/CSS.
 
 We do intend to support:
 
@@ -96,6 +105,21 @@ These pieces can be combined together to make a cohesive web engine.
 
 Both wrappers can optionally use <b>`blitz-net`</b> to fetch sub-resources.
 
+
+### Using the git verison of Dioxus Native
+
+The latest development version of the Dioxus Native lives in this repository. As Dioxus Native is under rapid development it can be useful to use this version to get access to the latest features and bug fixes sooner than they are available in an official release.
+
+To use the git version of `dioxus-native`:
+
+- Remove your dependency on the `dioxus` crate entirely.
+- Add `dioxus-native = { git = "https://github.com/DioxusLabs/blitz", rev = "e64a3d8", features = ["prelude"] }`
+- (replace `e64a3d8` with the git commit id of the version you want to use)
+- In your rust code change all instances of `use dioxus::prelude::*` to `use dioxus_native::prelude::*`.
+- If you need to access additonal functionality from the `dioxus` crate that is not exported from the Dioxus Native prelude then you can import it from the individual sub-crates (`dioxus-html`, `dioxus-signals`, `dioxus-router`, etc) instead.
+
+The git versions of Dioxus Native still depend on the stable v0.7.x version of Dioxus from crates.io, so any additional libraries that you are using (`dioxus-sdk`, `dioxus-components`, `dioxus-free-icons`, etc) should still work.
+
 ### Modular Components
 
 #### Core crates
@@ -109,24 +133,13 @@ Both wrappers can optionally use <b>`blitz-net`</b> to fetch sub-resources.
 - **`blitz-net`** -  Networking that can fetch resources over http, from the file-system or from encoded data URIs.
 <br /><small><b>Uses: [reqwest](https://github.com/seanmonstar/reqwest) (HTTP client)</b></small>
 - **`blitz-paint`** - Translates a `blitz-dom` tree into `anyrender` draw commands.
-<br /><small><b>Uses: [anyrender](https://github.com/DioxusLabs/blitz/tree/main/packages/anyrender) (2D drawing abstraction)</b></small>
+<br /><small><b>Uses: [anyrender](https://github.com/dioxuslabs/anyrender) (2D drawing abstraction)</b></small>
 - **`blitz-html`** -  Adds HTML parsing to `blitz-dom`
 <br /><small><b>Uses: [html5ever](https://github.com/servo/html5ever) (HTML parsing) and [xml5ever](https://github.com/servo/html5ever/tree/main/xml5ever) (XHTML parsing)</b></small>
 - **`blitz-shell`** - A shell that allows Blitz to render to a window (integrates a Winit event loop, AccessKit, Muda etc).
 <br /><small><b>Uses: [winit](https://github.com/rust-windowing/winit) (windowing/input), [accesskit](https://github.com/AccessKit/accesskit) (accessibility), [muda](https://github.com/tauri-apps/muda) (system menus)</b></small>
 
-#### Anyrender crates
-
-Temporarily hosted in the Blitz repository while they mature/stabilise, these will be spun out into their own repo when ready.
-
-- **`anyrender`** - A 2D drawing abstraction suitable for rendering web content.
-- **`anyrender_svg`** - Translates SVGs into `anyrender` drawing commands.
-<br /><small><b>Uses: [usvg](https://github.com/linebender/resvg) (SVG)</b></small>
-- **`anyrender_vello`** - A Vello/WGPU backend for `anyrender`
-<br /><small><b>Uses: [vello](https://github.com/linebender/vello) + [wgpu](https://github.com/gfx-rs/wgpu) for rendering</b></small>
-- **`anyrender_vello_cpu`** - A vello_cpu/softbuffer backend for `anyrender`
-<br /><small><b>Uses: [vello_cpu](https://github.com/linebender/vello/sparse_strips/vello_cpu) + [softbuffer](https://github.com/rust-windowing/softbuffer) for rendering</b></small>
-
+The AnyRender rendering abstraction now lives in it's repository over at https://github.com/dioxuslabs/anyrender
 
 ## License
 

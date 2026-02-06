@@ -1,13 +1,13 @@
 use color::{palette::css::WHITE, parse_color};
-use dioxus::prelude::*;
-use mini_dxn::use_wgpu;
+use dioxus_native::prelude::*;
+use dioxus_native::use_wgpu;
 use std::any::Any;
 
 use crate::{limits, Color, DemoMessage, DemoPaintSource, FEATURES, STYLES};
 
 pub fn launch_dx_native() {
     let config: Vec<Box<dyn Any>> = vec![Box::new(FEATURES), Box::new(limits())];
-    mini_dxn::launch_cfg(app, Vec::new(), config);
+    dioxus_native::launch_cfg(app, Vec::new(), config);
 }
 
 fn app() -> Element {
@@ -26,10 +26,9 @@ fn app() -> Element {
 
     rsx!(
         style { {STYLES} }
-        div { id:"overlay",
-            h2 { "Control Panel" },
-            button {
-                onclick: move |_| *show_cube.write() = !show_cube(),
+        div { id: "overlay",
+            h2 { "Control Panel" }
+            button { onclick: move |_| *show_cube.write() = !show_cube(),
                 if show_cube() {
                     "Hide cube"
                 } else {
@@ -37,12 +36,16 @@ fn app() -> Element {
                 }
             }
             br {}
-            ColorControl { label: "Color:", color_str },
-            p { "This overlay demonstrates that the custom WGPU content can be rendered beneath layers of HTML content" }
+            ColorControl { label: "Color:", color_str }
+            p {
+                "This overlay demonstrates that the custom WGPU content can be rendered beneath layers of HTML content"
+            }
         }
-        div { id:"underlay",
-            h2 { "Underlay" },
-            p { "This underlay demonstrates that the custom WGPU content can be rendered above layers and blended with the content underneath" }
+        div { id: "underlay",
+            h2 { "Underlay" }
+            p {
+                "This underlay demonstrates that the custom WGPU content can be rendered above layers and blended with the content underneath"
+            }
         }
         header {
             h2 { "Blitz WGPU Demo" }
@@ -55,16 +58,15 @@ fn app() -> Element {
 
 #[component]
 fn ColorControl(label: &'static str, color_str: Signal<String>) -> Element {
-    rsx!(div {
-        class: "color-control",
-        { label },
-        input {
-            value: color_str(),
-            oninput: move |evt| {
-                *color_str.write() = evt.value()
+    rsx!(
+        div { class: "color-control",
+            {label}
+            input {
+                value: color_str(),
+                oninput: move |evt| { *color_str.write() = evt.value() },
             }
         }
-    })
+    )
 }
 
 #[component]
@@ -79,11 +81,8 @@ fn SpinningCube(color: Memo<Color>) -> Element {
     });
 
     rsx!(
-        div { id:"canvas-container",
-            canvas {
-                id: "demo-canvas",
-                data: paint_source_id
-            }
+        div { id: "canvas-container",
+            canvas { id: "demo-canvas", "src": paint_source_id }
         }
     )
 }

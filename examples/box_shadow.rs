@@ -1,25 +1,16 @@
 use dioxus::prelude::*;
 
 fn main() {
-    mini_dxn::launch(app);
+    dioxus_native::launch(app);
 }
 
 fn app() -> Element {
     rsx! {
         div {
             style { {CSS} }
-            div {
-                id: "box-shadow-1",
-                class: "box-shadow",
-            }
-            div {
-                id: "box-shadow-2",
-                class: "box-shadow",
-            }
-            div {
-                id: "box-shadow-3",
-                class: "box-shadow",
-            }
+            div { id: "box-shadow-1", class: "box-shadow" }
+            div { id: "box-shadow-2", class: "box-shadow" }
+            div { id: "box-shadow-3", class: "box-shadow" }
         }
     }
 }

@@ -1,27 +1,37 @@
+//! Conversion functions from Stylo computed style types to Taffy equivalents
+
 /// Private module of type aliases so we can refer to stylo types with nicer names
-mod stylo {
+pub(crate) mod stylo {
+    pub(crate) use style::Atom;
     pub(crate) use style::properties::ComputedValues;
     pub(crate) use style::properties::generated::longhands::box_sizing::computed_value::T as BoxSizing;
     pub(crate) use style::properties::longhands::aspect_ratio::computed_value::T as AspectRatio;
     pub(crate) use style::properties::longhands::position::computed_value::T as Position;
     pub(crate) use style::values::computed::length_percentage::CalcLengthPercentage;
     pub(crate) use style::values::computed::length_percentage::Unpacked as UnpackedLengthPercentage;
-    pub(crate) use style::values::computed::{LengthPercentage, Percentage};
+    pub(crate) use style::values::computed::{BorderSideWidth, LengthPercentage, Percentage};
     pub(crate) use style::values::generics::NonNegative;
     pub(crate) use style::values::generics::length::{
         GenericLengthPercentageOrNormal, GenericMargin, GenericMaxSize, GenericSize,
     };
     pub(crate) use style::values::generics::position::{Inset as GenericInset, PreferredRatio};
     pub(crate) use style::values::specified::align::{AlignFlags, ContentDistribution};
+    pub(crate) use style::values::specified::border::BorderStyle;
     pub(crate) use style::values::specified::box_::{
         Display, DisplayInside, DisplayOutside, Overflow,
     };
+    pub(crate) use style::values::specified::position::GridTemplateAreas;
+    pub(crate) use style::values::specified::position::NamedArea;
+    pub(crate) use style_atoms::atom;
     pub(crate) type MarginVal = GenericMargin<LengthPercentage>;
     pub(crate) type InsetVal = GenericInset<Percentage, LengthPercentage>;
     pub(crate) type Size = GenericSize<NonNegative<LengthPercentage>>;
     pub(crate) type MaxSize = GenericMaxSize<NonNegative<LengthPercentage>>;
 
     pub(crate) type Gap = GenericLengthPercentageOrNormal<NonNegative<LengthPercentage>>;
+
+    #[cfg(feature = "floats")]
+    pub(crate) use style::values::computed::{Clear, Float};
 
     #[cfg(feature = "flexbox")]
     pub(crate) use style::{
@@ -44,6 +54,7 @@ mod stylo {
     };
 }
 
+use stylo::Atom;
 use taffy::CompactLength;
 use taffy::style_helpers::*;
 
@@ -73,6 +84,7 @@ pub fn dimension(val: &stylo::Size) -> taffy::Dimension {
         stylo::Size::FitContent => taffy::Dimension::AUTO,
         stylo::Size::FitContentFunction(_) => taffy::Dimension::AUTO,
         stylo::Size::Stretch => taffy::Dimension::AUTO,
+        stylo::Size::WebkitFillAvailable => taffy::Dimension::AUTO,
 
         // Anchor positioning will be flagged off for time being
         stylo::Size::AnchorSizeFunction(_) => unreachable!(),
@@ -92,6 +104,7 @@ pub fn max_size_dimension(val: &stylo::MaxSize) -> taffy::Dimension {
         stylo::MaxSize::FitContent => taffy::Dimension::AUTO,
         stylo::MaxSize::FitContentFunction(_) => taffy::Dimension::AUTO,
         stylo::MaxSize::Stretch => taffy::Dimension::AUTO,
+        stylo::MaxSize::WebkitFillAvailable => taffy::Dimension::AUTO,
 
         // Anchor positioning will be flagged off for time being
         stylo::MaxSize::AnchorSizeFunction(_) => unreachable!(),
@@ -109,6 +122,17 @@ pub fn margin(val: &stylo::MarginVal) -> taffy::LengthPercentageAuto {
         stylo::MarginVal::AnchorSizeFunction(_) => unreachable!(),
         stylo::MarginVal::AnchorContainingCalcFunction(_) => unreachable!(),
     }
+}
+
+#[inline]
+pub fn border(
+    width: &stylo::BorderSideWidth,
+    style: stylo::BorderStyle,
+) -> taffy::LengthPercentage {
+    if style.none_or_hidden() {
+        return taffy::style_helpers::zero();
+    }
+    taffy::style_helpers::length(width.0.to_f32_px())
 }
 
 #[inline]
@@ -322,6 +346,33 @@ pub fn flex_wrap(input: stylo::FlexWrap) -> taffy::FlexWrap {
     }
 }
 
+#[inline]
+#[cfg(feature = "floats")]
+pub fn float(input: stylo::Float) -> taffy::Float {
+    match input {
+        stylo::Float::Left => taffy::Float::Left,
+        stylo::Float::Right => taffy::Float::Right,
+        stylo::Float::None => taffy::Float::None,
+
+        stylo::Float::InlineStart => taffy::Float::Left,
+        stylo::Float::InlineEnd => taffy::Float::Right,
+    }
+}
+
+#[inline]
+#[cfg(feature = "floats")]
+pub fn clear(input: stylo::Clear) -> taffy::Clear {
+    match input {
+        stylo::Clear::Left => taffy::Clear::Left,
+        stylo::Clear::Right => taffy::Clear::Right,
+        stylo::Clear::Both => taffy::Clear::Both,
+        stylo::Clear::None => taffy::Clear::None,
+
+        stylo::Clear::InlineStart => taffy::Clear::Left,
+        stylo::Clear::InlineEnd => taffy::Clear::Right,
+    }
+}
+
 // CSS Grid styles
 // ===============
 
@@ -341,15 +392,24 @@ pub fn grid_auto_flow(input: stylo::GridAutoFlow) -> taffy::GridAutoFlow {
 
 #[inline]
 #[cfg(feature = "grid")]
-pub fn grid_line(input: &stylo::GridLine) -> taffy::GridPlacement {
+pub fn grid_line(input: &stylo::GridLine) -> taffy::GridPlacement<Atom> {
     if input.is_auto() {
         taffy::GridPlacement::Auto
     } else if input.is_span {
-        taffy::style_helpers::span(input.line_num.try_into().unwrap())
-    } else if input.line_num == 0 {
-        taffy::GridPlacement::Auto
+        if input.ident.0 != stylo::atom!("") {
+            taffy::GridPlacement::NamedSpan(
+                input.ident.0.clone(),
+                input.line_num.try_into().unwrap(),
+            )
+        } else {
+            taffy::GridPlacement::Span(input.line_num as u16)
+        }
+    } else if input.ident.0 != stylo::atom!("") {
+        taffy::GridPlacement::NamedLine(input.ident.0.clone(), input.line_num as i16)
+    } else if input.line_num != 0 {
+        taffy::style_helpers::line(input.line_num as i16)
     } else {
-        taffy::style_helpers::line(input.line_num.try_into().unwrap())
+        taffy::GridPlacement::Auto
     }
 }
 
@@ -357,7 +417,7 @@ pub fn grid_line(input: &stylo::GridLine) -> taffy::GridPlacement {
 #[cfg(feature = "grid")]
 pub fn grid_template_tracks(
     input: &stylo::GridTemplateComponent,
-) -> Vec<taffy::TrackSizingFunction> {
+) -> Vec<taffy::GridTemplateComponent<Atom>> {
     match input {
         stylo::GenericGridTemplateComponent::None => Vec::new(),
         stylo::GenericGridTemplateComponent::TrackList(list) => list
@@ -365,12 +425,24 @@ pub fn grid_template_tracks(
             .iter()
             .map(|track| match track {
                 stylo::TrackListValue::TrackSize(size) => {
-                    taffy::TrackSizingFunction::Single(track_size(size))
+                    taffy::GridTemplateComponent::Single(track_size(size))
                 }
-                stylo::TrackListValue::TrackRepeat(repeat) => taffy::TrackSizingFunction::Repeat(
-                    track_repeat(repeat.count),
-                    repeat.track_sizes.iter().map(track_size).collect(),
-                ),
+                stylo::TrackListValue::TrackRepeat(repeat) => {
+                    taffy::GridTemplateComponent::Repeat(taffy::GridTemplateRepetition {
+                        count: track_repeat(repeat.count),
+                        tracks: repeat.track_sizes.iter().map(track_size).collect(),
+                        line_names: repeat
+                            .line_names
+                            .iter()
+                            .map(|line_name_set| {
+                                line_name_set
+                                    .iter()
+                                    .map(|ident| ident.0.clone())
+                                    .collect::<Vec<_>>()
+                            })
+                            .collect::<Vec<_>>(),
+                    })
+                }
             })
             .collect(),
 
@@ -382,29 +454,65 @@ pub fn grid_template_tracks(
 
 #[inline]
 #[cfg(feature = "grid")]
-pub fn grid_auto_tracks(
-    input: &stylo::ImplicitGridTracks,
-) -> Vec<taffy::NonRepeatedTrackSizingFunction> {
-    input.0.iter().map(track_size).collect()
-}
-
-#[inline]
-#[cfg(feature = "grid")]
-pub fn track_repeat(input: stylo::RepeatCount<i32>) -> taffy::GridTrackRepetition {
+pub fn grid_template_line_names(
+    input: &stylo::GridTemplateComponent,
+) -> Option<crate::wrapper::StyloLineNameIter<'_>> {
     match input {
-        stylo::RepeatCount::Number(val) => {
-            taffy::GridTrackRepetition::Count(val.try_into().unwrap())
+        stylo::GenericGridTemplateComponent::None => None,
+        stylo::GenericGridTemplateComponent::TrackList(list) => {
+            Some(crate::wrapper::StyloLineNameIter::new(&list.line_names))
         }
-        stylo::RepeatCount::AutoFill => taffy::GridTrackRepetition::AutoFill,
-        stylo::RepeatCount::AutoFit => taffy::GridTrackRepetition::AutoFit,
+
+        // TODO: Implement subgrid and masonry
+        stylo::GenericGridTemplateComponent::Subgrid(_) => None,
+        stylo::GenericGridTemplateComponent::Masonry => None,
     }
 }
 
 #[inline]
 #[cfg(feature = "grid")]
-pub fn track_size(
-    input: &stylo::TrackSize<stylo::LengthPercentage>,
-) -> taffy::NonRepeatedTrackSizingFunction {
+pub fn grid_template_area(input: &stylo::NamedArea) -> taffy::GridTemplateArea<Atom> {
+    taffy::GridTemplateArea {
+        name: input.name.clone(),
+        row_start: input.rows.start as u16,
+        row_end: input.rows.end as u16,
+        column_start: input.columns.start as u16,
+        column_end: input.columns.end as u16,
+    }
+}
+
+#[inline]
+#[cfg(feature = "grid")]
+fn grid_template_areas(input: &stylo::GridTemplateAreas) -> Vec<taffy::GridTemplateArea<Atom>> {
+    match input {
+        stylo::GridTemplateAreas::None => Vec::new(),
+        stylo::GridTemplateAreas::Areas(template_areas_arc) => {
+            crate::wrapper::GridAreaWrapper(&template_areas_arc.0.areas)
+                .into_iter()
+                .collect()
+        }
+    }
+}
+
+#[inline]
+#[cfg(feature = "grid")]
+pub fn grid_auto_tracks(input: &stylo::ImplicitGridTracks) -> Vec<taffy::TrackSizingFunction> {
+    input.0.iter().map(track_size).collect()
+}
+
+#[inline]
+#[cfg(feature = "grid")]
+pub fn track_repeat(input: stylo::RepeatCount<i32>) -> taffy::RepetitionCount {
+    match input {
+        stylo::RepeatCount::Number(val) => taffy::RepetitionCount::Count(val.try_into().unwrap()),
+        stylo::RepeatCount::AutoFill => taffy::RepetitionCount::AutoFill,
+        stylo::RepeatCount::AutoFit => taffy::RepetitionCount::AutoFit,
+    }
+}
+
+#[inline]
+#[cfg(feature = "grid")]
+pub fn track_size(input: &stylo::TrackSize<stylo::LengthPercentage>) -> taffy::TrackSizingFunction {
     use taffy::MaxTrackSizingFunction;
 
     match input {
@@ -468,7 +576,8 @@ pub fn max_track(
     }
 }
 
-pub fn to_taffy_style(style: &stylo::ComputedValues) -> taffy::Style {
+/// Eagerly convert an entire [`stylo::ComputedValues`] into a [`taffy::Style`]
+pub fn to_taffy_style(style: &stylo::ComputedValues) -> taffy::Style<Atom> {
     let display = style.clone_display();
     let pos = style.get_position();
     let margin = style.get_margin();
@@ -476,6 +585,7 @@ pub fn to_taffy_style(style: &stylo::ComputedValues) -> taffy::Style {
     let border = style.get_border();
 
     taffy::Style {
+        dummy: core::marker::PhantomData,
         display: self::display(display),
         box_sizing: self::box_sizing(style.clone_box_sizing()),
         item_is_table: display.inside() == stylo::DisplayInside::Table,
@@ -486,6 +596,11 @@ pub fn to_taffy_style(style: &stylo::ComputedValues) -> taffy::Style {
             y: self::overflow(style.clone_overflow_y()),
         },
         scrollbar_width: 0.0,
+
+        #[cfg(feature = "floats")]
+        float: self::float(style.clone_float()),
+        #[cfg(feature = "floats")]
+        clear: self::clear(style.clone_clear()),
 
         size: taffy::Size {
             width: self::dimension(&pos.width),
@@ -520,10 +635,10 @@ pub fn to_taffy_style(style: &stylo::ComputedValues) -> taffy::Style {
             bottom: self::length_percentage(&padding.padding_bottom.0),
         },
         border: taffy::Rect {
-            left: taffy::style_helpers::length(border.border_left_width.to_f32_px()),
-            right: taffy::style_helpers::length(border.border_right_width.to_f32_px()),
-            top: taffy::style_helpers::length(border.border_top_width.to_f32_px()),
-            bottom: taffy::style_helpers::length(border.border_bottom_width.to_f32_px()),
+            left: self::border(&border.border_left_width, border.border_left_style),
+            right: self::border(&border.border_right_width, border.border_right_style),
+            top: self::border(&border.border_top_width, border.border_top_style),
+            bottom: self::border(&border.border_bottom_width, border.border_bottom_style),
         },
 
         // Gap
@@ -535,17 +650,17 @@ pub fn to_taffy_style(style: &stylo::ComputedValues) -> taffy::Style {
 
         // Alignment
         #[cfg(any(feature = "flexbox", feature = "grid"))]
-        align_content: self::content_alignment(pos.align_content.0),
+        align_content: self::content_alignment(pos.align_content),
         #[cfg(any(feature = "flexbox", feature = "grid"))]
-        justify_content: self::content_alignment(pos.justify_content.0),
+        justify_content: self::content_alignment(pos.justify_content),
         #[cfg(any(feature = "flexbox", feature = "grid"))]
         align_items: self::item_alignment(pos.align_items.0),
         #[cfg(any(feature = "flexbox", feature = "grid"))]
-        align_self: self::item_alignment((pos.align_self.0).0),
+        align_self: self::item_alignment(pos.align_self.0),
         #[cfg(feature = "grid")]
-        justify_items: self::item_alignment(pos.justify_items.computed.0),
+        justify_items: self::item_alignment((pos.justify_items.computed.0).0),
         #[cfg(feature = "grid")]
-        justify_self: self::item_alignment((pos.justify_self.0).0),
+        justify_self: self::item_alignment(pos.justify_self.0),
         #[cfg(feature = "block")]
         text_align: self::text_align(style.clone_text_align()),
 
@@ -568,6 +683,23 @@ pub fn to_taffy_style(style: &stylo::ComputedValues) -> taffy::Style {
         grid_template_rows: self::grid_template_tracks(&pos.grid_template_rows),
         #[cfg(feature = "grid")]
         grid_template_columns: self::grid_template_tracks(&pos.grid_template_columns),
+        #[cfg(feature = "grid")]
+        grid_template_row_names: match self::grid_template_line_names(&pos.grid_template_rows) {
+            Some(iter) => iter
+                .map(|line_name_set| line_name_set.cloned().collect::<Vec<_>>())
+                .collect::<Vec<_>>(),
+            None => Vec::new(),
+        },
+        #[cfg(feature = "grid")]
+        grid_template_column_names: match self::grid_template_line_names(&pos.grid_template_columns)
+        {
+            Some(iter) => iter
+                .map(|line_name_set| line_name_set.cloned().collect::<Vec<_>>())
+                .collect::<Vec<_>>(),
+            None => Vec::new(),
+        },
+        #[cfg(feature = "grid")]
+        grid_template_areas: self::grid_template_areas(&pos.grid_template_areas),
         #[cfg(feature = "grid")]
         grid_auto_rows: self::grid_auto_tracks(&pos.grid_auto_rows),
         #[cfg(feature = "grid")]

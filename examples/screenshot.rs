@@ -1,15 +1,14 @@
 //! Load first CLI argument as a url. Fallback to google.com if no CLI argument is provided.
 
-use anyrender::render_to_buffer;
-use anyrender_vello::VelloImageRenderer;
+use anyrender::{PaintScene as _, render_to_buffer};
 use anyrender_vello_cpu::VelloCpuImageRenderer;
-use blitz_dom::net::Resource;
+use blitz_dom::{DocumentConfig, util::Color};
 use blitz_html::HtmlDocument;
-use blitz_net::{MpscCallback, Provider};
+use blitz_net::Provider;
 use blitz_paint::paint_scene;
-use blitz_traits::navigation::DummyNavigationProvider;
-use blitz_traits::net::SharedProvider;
-use blitz_traits::{ColorScheme, Viewport};
+use blitz_traits::shell::{ColorScheme, Viewport};
+use peniko::Fill;
+use peniko::kurbo::Rect;
 use reqwest::Url;
 use std::sync::Arc;
 use std::{
@@ -25,8 +24,6 @@ const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64; rv:60.0) Gecko/2010010
 async fn main() {
     let mut timer = Timer::init();
 
-    let use_cpu_renderer = std::env::args().any(|arg| arg == "--cpu");
-
     let url_string = std::env::args()
         .nth(1)
         .unwrap_or_else(|| "https://www.google.com".into());
@@ -34,7 +31,9 @@ async fn main() {
     println!("{}", url_string);
 
     // Assert that url is valid
-    let url = Url::parse(&url_string).expect("Invalid url");
+    let url = Url::parse(&url_string)
+        .unwrap_or_else(|_| Url::parse(&format!("https://{url_string}")).expect("Invalid url"));
+    let url_string = url.to_string();
 
     // Fetch HTML from URL
     let html = match url.scheme() {
@@ -64,44 +63,39 @@ async fn main() {
         .and_then(|arg| arg.parse().ok())
         .unwrap_or(1200);
 
-    let (mut recv, callback) = MpscCallback::new();
-    let callback = Arc::new(callback);
-    let net = Arc::new(Provider::new(callback));
-
-    let navigation_provider = Arc::new(DummyNavigationProvider);
+    let net = Arc::new(Provider::new(None));
 
     timer.time("Setup document prerequisites");
 
     // Create HtmlDocument
     let mut document = HtmlDocument::from_html(
         &html,
-        Some(url_string.clone()),
-        Vec::new(),
-        Arc::clone(&net) as SharedProvider<Resource>,
-        None,
-        navigation_provider,
+        DocumentConfig {
+            base_url: Some(url_string.clone()),
+            net_provider: Some(Arc::clone(&net) as _),
+            viewport: Some(Viewport::new(
+                width * (scale as u32),
+                height * (scale as u32),
+                scale as f32,
+                ColorScheme::Light,
+            )),
+            ..Default::default()
+        },
     );
 
     timer.time("Parsed document");
 
-    document.as_mut().set_viewport(Viewport::new(
-        width * (scale as u32),
-        height * (scale as u32),
-        scale as f32,
-        ColorScheme::Light,
-    ));
-
-    while !net.is_empty() {
-        let Some((_, res)) = recv.recv().await else {
+    loop {
+        document.resolve(0.0);
+        if net.is_empty() {
             break;
-        };
-        document.as_mut().load_resource(res);
+        }
     }
 
     timer.time("Fetched assets");
 
     // Compute style, layout, etc for HtmlDocument
-    document.as_mut().resolve();
+    document.as_mut().resolve(0.0);
 
     timer.time("Resolved styles and layout");
 
@@ -111,19 +105,31 @@ async fn main() {
     let render_height = ((computed_height as f64).max(height as f64).min(4000.0) * scale) as u32;
 
     // Render document to RGBA buffer
-    let buffer = if use_cpu_renderer {
-        render_to_buffer::<VelloCpuImageRenderer, _>(
-            |scene| paint_scene(scene, document.as_ref(), scale, render_width, render_height),
-            render_width,
-            render_height,
-        )
-    } else {
-        render_to_buffer::<VelloImageRenderer, _>(
-            |scene| paint_scene(scene, document.as_ref(), scale, render_width, render_height),
-            render_width,
-            render_height,
-        )
-    };
+    let buffer = render_to_buffer::<VelloCpuImageRenderer, _>(
+        |scene| {
+            // Render white background
+            scene.fill(
+                Fill::NonZero,
+                Default::default(),
+                Color::WHITE,
+                Default::default(),
+                &Rect::new(0.0, 0.0, render_width as f64, render_height as f64),
+            );
+
+            // Render document
+            paint_scene(
+                scene,
+                document.as_ref(),
+                scale,
+                render_width,
+                render_height,
+                0,
+                0,
+            );
+        },
+        render_width,
+        render_height,
+    );
 
     timer.time("Rendered to buffer");
 

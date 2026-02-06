@@ -1,16 +1,18 @@
 use std::sync::Arc;
 
 use crate::WindowRenderer;
-use blitz_dom::net::Resource;
+use blitz_dom::DocumentConfig;
 use blitz_html::HtmlDocument;
 use blitz_net::Provider;
-use blitz_shell::{BlitzApplication, BlitzShellEvent, View, WindowConfig};
+use blitz_shell::{BlitzApplication, BlitzShellEvent, BlitzShellProxy, View, WindowConfig};
 use blitz_traits::navigation::{NavigationOptions, NavigationProvider};
 use tokio::runtime::Handle;
 use winit::application::ApplicationHandler;
 use winit::event::{Modifiers, StartCause, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, EventLoopProxy};
+use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::{KeyCode, PhysicalKey};
+#[cfg(target_os = "macos")]
+use winit::platform::macos::ApplicationHandlerExtMacOS;
 use winit::window::{Theme, WindowId};
 
 use crate::fetch;
@@ -21,7 +23,7 @@ pub struct ReadmeEvent;
 pub struct ReadmeApplication {
     inner: BlitzApplication<WindowRenderer>,
     handle: tokio::runtime::Handle,
-    net_provider: Arc<Provider<Resource>>,
+    net_provider: Arc<Provider>,
     raw_url: String,
     keyboard_modifiers: Modifiers,
     navigation_provider: Arc<dyn NavigationProvider>,
@@ -30,14 +32,15 @@ pub struct ReadmeApplication {
 
 impl ReadmeApplication {
     pub fn new(
-        proxy: EventLoopProxy<BlitzShellEvent>,
+        proxy: BlitzShellProxy,
+        event_queue: std::sync::mpsc::Receiver<BlitzShellEvent>,
         raw_url: String,
-        net_provider: Arc<Provider<Resource>>,
+        net_provider: Arc<Provider>,
         navigation_provider: Arc<dyn NavigationProvider>,
     ) -> Self {
         let handle = Handle::current();
         Self {
-            inner: BlitzApplication::new(proxy.clone()),
+            inner: BlitzApplication::new(proxy, event_queue),
             handle,
             raw_url,
             net_provider,
@@ -63,32 +66,28 @@ impl ReadmeApplication {
         self.handle.spawn(async move {
             let url = url;
             let (base_url, contents, is_md, _file_path) = fetch(&url, net_provider).await;
-            proxy
-                .send_event(BlitzShellEvent::NavigationLoad {
-                    url: base_url,
-                    contents,
-                    is_md,
-                    retain_scroll_position,
-                })
-                .unwrap();
+            proxy.send_event(BlitzShellEvent::NavigationLoad {
+                url: base_url,
+                contents,
+                is_md,
+                retain_scroll_position,
+            });
         });
     }
 
     fn navigate(&mut self, options: NavigationOptions) {
         let proxy = self.inner.proxy.clone();
         self.net_provider.fetch_with_callback(
-            dbg!(options.into_request()),
+            options.into_request(),
             Box::new(move |result| {
                 let (url, bytes) = result.unwrap();
                 let contents = std::str::from_utf8(&bytes).unwrap().to_string();
-                proxy
-                    .send_event(BlitzShellEvent::NavigationLoad {
-                        url,
-                        contents,
-                        is_md: false,
-                        retain_scroll_position: false,
-                    })
-                    .unwrap();
+                proxy.send_event(BlitzShellEvent::NavigationLoad {
+                    url,
+                    contents,
+                    is_md: false,
+                    retain_scroll_position: false,
+                });
             }),
         );
     }
@@ -110,11 +109,13 @@ impl ReadmeApplication {
 
         let doc = HtmlDocument::from_html(
             &html,
-            Some(url),
-            stylesheets,
-            self.net_provider.clone(),
-            None,
-            self.navigation_provider.clone(),
+            DocumentConfig {
+                base_url: Some(url),
+                ua_stylesheets: Some(stylesheets),
+                net_provider: Some(self.net_provider.clone()),
+                navigation_provider: Some(self.navigation_provider.clone()),
+                ..Default::default()
+            },
         );
         self.window_mut()
             .replace_document(Box::new(doc) as _, retain_scroll_position);
@@ -130,22 +131,35 @@ impl ReadmeApplication {
     }
 }
 
-impl ApplicationHandler<BlitzShellEvent> for ReadmeApplication {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+impl ApplicationHandler for ReadmeApplication {
+    #[cfg(target_os = "macos")]
+    fn macos_handler(&mut self) -> Option<&mut dyn ApplicationHandlerExtMacOS> {
+        self.inner.macos_handler()
+    }
+
+    fn resumed(&mut self, event_loop: &dyn ActiveEventLoop) {
         self.inner.resumed(event_loop);
     }
 
-    fn suspended(&mut self, event_loop: &ActiveEventLoop) {
+    fn suspended(&mut self, event_loop: &dyn ActiveEventLoop) {
         self.inner.suspended(event_loop);
     }
 
-    fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: StartCause) {
+    fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
+        self.inner.can_create_surfaces(event_loop);
+    }
+
+    fn destroy_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
+        self.inner.destroy_surfaces(event_loop);
+    }
+
+    fn new_events(&mut self, event_loop: &dyn ActiveEventLoop, cause: StartCause) {
         self.inner.new_events(event_loop, cause);
     }
 
     fn window_event(
         &mut self,
-        event_loop: &ActiveEventLoop,
+        event_loop: &dyn ActiveEventLoop,
         window_id: WindowId,
         event: WindowEvent,
     ) {
@@ -155,7 +169,7 @@ impl ApplicationHandler<BlitzShellEvent> for ReadmeApplication {
 
         if let WindowEvent::KeyboardInput { event, .. } = &event {
             let mods = self.keyboard_modifiers.state();
-            if !event.state.is_pressed() && (mods.control_key() || mods.super_key()) {
+            if !event.state.is_pressed() && (mods.control_key() || mods.meta_key()) {
                 match event.physical_key {
                     PhysicalKey::Code(KeyCode::KeyR) => self.reload_document(true),
                     PhysicalKey::Code(KeyCode::KeyT) => self.toggle_theme(),
@@ -173,28 +187,30 @@ impl ApplicationHandler<BlitzShellEvent> for ReadmeApplication {
         self.inner.window_event(event_loop, window_id, event);
     }
 
-    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: BlitzShellEvent) {
-        match event {
-            BlitzShellEvent::Embedder(event) => {
-                if let Some(_event) = event.downcast_ref::<ReadmeEvent>() {
-                    self.reload_document(true);
+    fn proxy_wake_up(&mut self, event_loop: &dyn ActiveEventLoop) {
+        while let Ok(event) = self.inner.event_queue.try_recv() {
+            match event {
+                BlitzShellEvent::Embedder(event) => {
+                    if let Some(_event) = event.downcast_ref::<ReadmeEvent>() {
+                        self.reload_document(true);
+                    }
                 }
+                BlitzShellEvent::Navigate(options) => {
+                    let old_url = std::mem::replace(&mut self.raw_url, options.url.to_string());
+                    self.url_history.push(old_url);
+                    self.reload_document(false);
+                    self.navigate(*options);
+                }
+                BlitzShellEvent::NavigationLoad {
+                    url,
+                    contents,
+                    retain_scroll_position,
+                    is_md,
+                } => {
+                    self.load_document(contents, retain_scroll_position, url, is_md);
+                }
+                event => self.inner.handle_blitz_shell_event(event_loop, event),
             }
-            BlitzShellEvent::Navigate(options) => {
-                let old_url = std::mem::replace(&mut self.raw_url, options.url.to_string());
-                self.url_history.push(old_url);
-                self.reload_document(false);
-                self.navigate(*options);
-            }
-            BlitzShellEvent::NavigationLoad {
-                url,
-                contents,
-                retain_scroll_position,
-                is_md,
-            } => {
-                self.load_document(contents, retain_scroll_position, url, is_md);
-            }
-            event => self.inner.user_event(event_loop, event),
         }
     }
 }

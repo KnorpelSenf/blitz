@@ -1,9 +1,8 @@
-use super::{ElementCx, to_peniko_image};
+use super::{ElementCx, to_image_quality, to_peniko_image};
 use crate::color::{Color, ToColorColor};
 use crate::gradient::to_peniko_gradient;
-use crate::layers::maybe_with_layer;
 use anyrender::PaintScene;
-use blitz_dom::node::ImageData;
+use blitz_dom::node::{ImageData, SpecialElementData};
 use kurbo::{self, BezPath, Point, Rect, Shape, Size, Vec2};
 use peniko::{self, Fill};
 use style::{
@@ -52,7 +51,7 @@ impl ElementCx<'_> {
                 ContentBox => self.frame.content_box_path(),
             };
 
-            maybe_with_layer(
+            self.context.layer_manager.maybe_with_layer(
                 scene,
                 true,
                 1.0,
@@ -93,6 +92,49 @@ impl ElementCx<'_> {
         }
     }
 
+    pub(super) fn draw_table_row_backgrounds(&self, scene: &mut impl PaintScene) {
+        let SpecialElementData::TableRoot(table) = &self.element.special_data else {
+            return;
+        };
+        let Some(grid_info) = &mut *table.computed_grid_info.borrow_mut() else {
+            return;
+        };
+
+        let cols = &grid_info.columns;
+        let inner_width =
+            (cols.sizes.iter().sum::<f32>() + cols.gutters.iter().sum::<f32>()) as f64;
+
+        let rows = &grid_info.rows;
+        let mut y = rows.gutters.first().copied().unwrap_or_default() as f64;
+        for ((row, &height), &gutter) in table
+            .rows
+            .iter()
+            .zip(rows.sizes.iter())
+            .zip(rows.gutters.iter().skip(1))
+        {
+            let row_node = &self.context.dom.get_node(row.node_id).unwrap();
+            let Some(style) = row_node.primary_styles() else {
+                continue;
+            };
+
+            let shape =
+                Rect::new(0.0, y, inner_width, y + height as f64).scale_from_origin(self.scale);
+
+            let current_color = style.clone_color();
+            let background_color = &style.get_background().background_color;
+            let bg_color = background_color
+                .resolve_to_absolute(&current_color)
+                .as_srgb_color();
+
+            if bg_color != Color::TRANSPARENT {
+                // Fill the color
+                scene.fill(Fill::NonZero, self.transform, bg_color, None, &shape);
+            }
+
+            y += (height + gutter) as f64;
+        }
+    }
+
     fn draw_solid_bg(&self, scene: &mut impl PaintScene, shape: &BezPath) {
         let current_color = self.style.clone_color();
         let background_color = &self.style.get_background().background_color;
@@ -119,8 +161,8 @@ impl ElementCx<'_> {
 
         let bg_styles = &self.style.get_background();
 
-        let frame_w = self.frame.padding_box.width() as f32;
-        let frame_h = self.frame.padding_box.height() as f32;
+        let frame_w = (self.frame.padding_box.width() / self.scale) as f32;
+        let frame_h = (self.frame.padding_box.height() / self.scale) as f32;
 
         let svg_size = svg.size();
         let bg_size = compute_background_size(
@@ -128,16 +170,11 @@ impl ElementCx<'_> {
             frame_w,
             frame_h,
             idx,
-            BackgroundSizeComputeMode::Size(
-                svg_size.width() / self.scale as f32,
-                svg_size.height() / self.scale as f32,
-            ),
-            self.scale as f32,
+            BackgroundSizeComputeMode::Size(svg_size.width(), svg_size.height()),
         );
-        let bg_size = bg_size * self.scale;
 
-        let x_ratio = bg_size.width as f64 / svg_size.width() as f64;
-        let y_ratio = bg_size.height as f64 / svg_size.height() as f64;
+        let x_ratio = (bg_size.width as f64 / svg_size.width() as f64) * self.scale;
+        let y_ratio = (bg_size.height as f64 / svg_size.height() as f64) * self.scale;
 
         let bg_pos = compute_background_position(
             bg_styles,
@@ -147,12 +184,12 @@ impl ElementCx<'_> {
         );
 
         let transform = kurbo::Affine::translate((
-            (self.pos.x * self.scale) + bg_pos.x,
-            (self.pos.y * self.scale) + bg_pos.y,
+            (self.pos.x + bg_pos.x) * self.scale,
+            (self.pos.y + bg_pos.y) * self.scale,
         ))
         .pre_scale_non_uniform(x_ratio, y_ratio);
 
-        anyrender_svg::append_tree(scene, svg, transform);
+        anyrender_svg::render_svg_tree(scene, svg, transform);
     }
 
     fn draw_raster_bg_image(&self, scene: &mut impl PaintScene, idx: usize) {
@@ -166,6 +203,9 @@ impl ElementCx<'_> {
         let ImageData::Raster(image_data) = &bg_image.image else {
             return;
         };
+
+        let image_rendering = self.style.clone_image_rendering();
+        let quality = to_image_quality(image_rendering);
 
         let bg_styles = &self.style.get_background();
 
@@ -319,7 +359,7 @@ impl ElementCx<'_> {
                     scene.fill(
                         peniko::Fill::NonZero,
                         transform,
-                        &to_peniko_image(image_data),
+                        to_peniko_image(image_data, quality).as_ref(),
                         None,
                         &Rect::new(0.0, 0.0, origin_rect.width(), origin_rect.height()),
                     );
@@ -329,7 +369,7 @@ impl ElementCx<'_> {
             scene.fill(
                 peniko::Fill::NonZero,
                 transform,
-                &to_peniko_image(image_data),
+                to_peniko_image(image_data, quality).as_ref(),
                 None,
                 &Rect::new(0.0, 0.0, origin_rect.width(), origin_rect.height()),
             );
@@ -376,8 +416,7 @@ impl ElementCx<'_> {
                         StyloBackgroundClip::BorderBox,
                         StyloBackgroundOrigin::PaddingBox,
                     ) {
-                    let extend_width =
-                        extend(self.frame.border_width.left + bg_pos_x, bg_size.width);
+                    let extend_width = extend(self.frame.border_width.x0 + bg_pos_x, bg_size.width);
 
                     let width = self.frame.border_box.width() + extend_width;
                     let count = (width / bg_size.width).ceil() as u32;
@@ -395,7 +434,7 @@ impl ElementCx<'_> {
                     )
                 {
                     let extend_width = extend(
-                        self.frame.border_width.left + self.frame.padding_width.left + bg_pos_x,
+                        self.frame.border_width.x0 + self.frame.padding_width.x0 + bg_pos_x,
                         bg_size.width,
                     );
                     let width = self.frame.border_box.width() + extend_width;
@@ -414,7 +453,7 @@ impl ElementCx<'_> {
                     )
                 {
                     let extend_width =
-                        extend(self.frame.padding_width.left + bg_pos_x, bg_size.width);
+                        extend(self.frame.padding_width.x0 + bg_pos_x, bg_size.width);
                     let width = self.frame.padding_box.width() + extend_width;
                     let count = (width / bg_size.width).ceil() as u32;
 
@@ -474,7 +513,7 @@ impl ElementCx<'_> {
                         StyloBackgroundOrigin::PaddingBox,
                     ) {
                     let extend_height =
-                        extend(self.frame.border_width.top + bg_pos_y, bg_size.height);
+                        extend(self.frame.border_width.y0 + bg_pos_y, bg_size.height);
                     let height = self.frame.border_box.height() + extend_height;
                     let count = (height / bg_size.height).ceil() as u32;
 
@@ -491,7 +530,7 @@ impl ElementCx<'_> {
                     )
                 {
                     let extend_height = extend(
-                        self.frame.border_width.top + self.frame.padding_width.top + bg_pos_x,
+                        self.frame.border_width.y0 + self.frame.padding_width.y0 + bg_pos_x,
                         bg_size.height,
                     );
                     let height = self.frame.border_box.height() + extend_height;
@@ -510,7 +549,7 @@ impl ElementCx<'_> {
                     )
                 {
                     let extend_height =
-                        extend(self.frame.padding_width.top + bg_pos_x, bg_size.height);
+                        extend(self.frame.padding_width.y0 + bg_pos_x, bg_size.height);
                     let height = self.frame.padding_box.height() + extend_height;
                     let count = (height / bg_size.height).ceil() as u32;
 
@@ -615,7 +654,6 @@ fn compute_background_position_and_background_size(
         container_h as f32,
         bg_idx,
         size_mode,
-        1.0,
     );
 
     let bg_pos = compute_background_position(
@@ -675,7 +713,6 @@ fn compute_background_size(
     container_h: f32,
     bg_idx: usize,
     mode: BackgroundSizeComputeMode,
-    scale: f32,
 ) -> kurbo::Size {
     use style::values::computed::{BackgroundSize, Length};
     use style::values::generics::length::GenericLengthPercentageOrAuto as Lpa;
@@ -714,7 +751,7 @@ fn compute_background_size(
                 }
                 (Lpa::Auto, Lpa::Auto) => match mode {
                     BackgroundSizeComputeMode::Auto => (container_w, container_h),
-                    BackgroundSizeComputeMode::Size(bg_w, bg_h) => (bg_w * scale, bg_h * scale),
+                    BackgroundSizeComputeMode::Size(bg_w, bg_h) => (bg_w, bg_h),
                 },
             }
         }

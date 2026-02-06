@@ -7,5 +7,7 @@
 /examples/output/**/*.jpeg
 /out
 /wpt/output
+/wpt/*.json
 /apps/wpt/output
 /sites
+.blitz-cache

@@ -6,7 +6,7 @@ use anyrender_vello_cpu::VelloCpuImageRenderer as VelloImageRenderer;
 use atomic_float::AtomicF64;
 use blitz_dom::net::Resource;
 use blitz_traits::navigation::{DummyNavigationProvider, NavigationProvider};
-use blitz_traits::{ColorScheme, Viewport};
+use blitz_traits::shell::{ColorScheme, Viewport};
 use panic_backtrace::StashedPanicInfo;
 use parley::FontContext;
 use report::{generate_expectations, generate_report};
@@ -423,7 +423,8 @@ fn main() {
                     );
                     let net_provider = Arc::new(WptNetProvider::new(&wpt_dir));
                     let reftest_re =
-                        Regex::new(r#"<link\s+rel=['"]match['"]\s+href=['"]([^'"]+)['"]"#).unwrap();
+                        Regex::new(r#"<link\s+rel=['"]?match['"]?\s+href=['"]([^'"]+)['"]"#)
+                            .unwrap();
 
                     let float_re = Regex::new(r#"float:"#).unwrap();
                     let intrinsic_re =
@@ -472,7 +473,7 @@ fn main() {
             // Clear any pending requests to avoid failed requests from a previous test interfering with subsequent tests
             ctx.net_provider.reset();
 
-            let num = num.fetch_add(1, Ordering::SeqCst) + 1;
+            let num = num.fetch_add(1, Ordering::Relaxed) + 1;
 
             let relative_path = path
                 .strip_prefix(&ctx.wpt_dir)
@@ -486,8 +487,7 @@ fn main() {
                 panic_backtrace::backtrace_cutoff(|| process_test_file(&mut ctx, &relative_path))
             }));
             let (kind, flags, status, subtest_counts, panic_info, subtest_results) = match result {
-                Ok((kind, flags, subtest_counts, subtest_results)) => {
-                    let status = subtest_counts.as_status();
+                Ok((kind, flags, status, subtest_counts, subtest_results)) => {
                     (kind, flags, status, subtest_counts, None, subtest_results)
                 }
                 Err(_) => {
@@ -505,41 +505,43 @@ fn main() {
 
             // Bump counts
             match status {
-                TestStatus::Pass => pass_count.fetch_add(1, Ordering::SeqCst),
+                TestStatus::Pass => pass_count.fetch_add(1, Ordering::Relaxed),
                 TestStatus::Fail => {
                     if flags.contains(TestFlags::USES_MASONRY) {
-                        masonry_fail_count.fetch_add(1, Ordering::SeqCst);
+                        masonry_fail_count.fetch_add(1, Ordering::Relaxed);
                     } else if flags.contains(TestFlags::USES_SUBGRID) {
-                        subgrid_fail_count.fetch_add(1, Ordering::SeqCst);
+                        subgrid_fail_count.fetch_add(1, Ordering::Relaxed);
                     } else if flags.contains(TestFlags::USES_WRITING_MODE) {
-                        writing_mode_fail_count.fetch_add(1, Ordering::SeqCst);
+                        writing_mode_fail_count.fetch_add(1, Ordering::Relaxed);
                     } else if flags.contains(TestFlags::USES_DIRECTION) {
-                        direction_fail_count.fetch_add(1, Ordering::SeqCst);
+                        direction_fail_count.fetch_add(1, Ordering::Relaxed);
                     } else if flags.contains(TestFlags::USES_INTRINSIC_SIZE) {
-                        intrinsic_size_fail_count.fetch_add(1, Ordering::SeqCst);
+                        intrinsic_size_fail_count.fetch_add(1, Ordering::Relaxed);
                     } else if flags.contains(TestFlags::USES_CALC) {
-                        calc_fail_count.fetch_add(1, Ordering::SeqCst);
+                        calc_fail_count.fetch_add(1, Ordering::Relaxed);
                     } else if flags.contains(TestFlags::USES_FLOAT) {
-                        float_fail_count.fetch_add(1, Ordering::SeqCst);
+                        float_fail_count.fetch_add(1, Ordering::Relaxed);
                     } else if kind == TestKind::Ref && flags.contains(TestFlags::USES_SCRIPT) {
-                        script_fail_count.fetch_add(1, Ordering::SeqCst);
+                        script_fail_count.fetch_add(1, Ordering::Relaxed);
                     } else {
-                        other_fail_count.fetch_add(1, Ordering::SeqCst);
+                        other_fail_count.fetch_add(1, Ordering::Relaxed);
                     }
-                    fail_count.fetch_add(1, Ordering::SeqCst)
+                    fail_count.fetch_add(1, Ordering::Relaxed)
                 }
-                TestStatus::Skip => skip_count.fetch_add(1, Ordering::SeqCst),
-                TestStatus::Crash => crash_count.fetch_add(1, Ordering::SeqCst),
+                TestStatus::Skip => skip_count.fetch_add(1, Ordering::Relaxed),
+                TestStatus::Crash => crash_count.fetch_add(1, Ordering::Relaxed),
             };
 
             // Bump fractional count
-            fractional_pass_count.fetch_add(subtest_counts.pass_fraction(), Ordering::SeqCst);
+            fractional_pass_count.fetch_add(subtest_counts.pass_fraction(), Ordering::Relaxed);
 
             // Bump subtest counts
-            subtest_count.fetch_add(subtest_counts.total, Ordering::SeqCst);
-            subtest_pass_count.fetch_add(subtest_counts.pass, Ordering::SeqCst);
-            subtest_fail_count
-                .fetch_add(subtest_counts.total - subtest_counts.pass, Ordering::SeqCst);
+            subtest_count.fetch_add(subtest_counts.total, Ordering::Relaxed);
+            subtest_pass_count.fetch_add(subtest_counts.pass, Ordering::Relaxed);
+            subtest_fail_count.fetch_add(
+                subtest_counts.total - subtest_counts.pass,
+                Ordering::Relaxed,
+            );
 
             let result = TestResult {
                 name: relative_path,

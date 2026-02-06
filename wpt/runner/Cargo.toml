@@ -3,23 +3,27 @@ name = "wpt"
 version = "0.1.0"
 edition = "2024"
 license.workspace = true
+rust-version.workspace = true
+publish = false
 
 [features]
-default = ["gpu"]
+default = ["cpu"]
 gpu = ["dep:anyrender_vello"]
 cpu = ["dep:anyrender_vello_cpu"]
+incremental = ["blitz-dom/incremental"]
 
 [dependencies]
-blitz-dom = { path = "../../packages/blitz-dom", default-features = false, features = ["svg", "woff-c"] }
-blitz-html = { path = "../../packages/blitz-html" }
-blitz-traits = { path = "../../packages/blitz-traits" }
-blitz-paint = { path = "../../packages/blitz-paint" }
-anyrender_vello = { path = "../../packages/anyrender_vello", optional = true }
-anyrender_vello_cpu = { path = "../../packages/anyrender_vello_cpu", optional = true }
-anyrender = { path = "../../packages/anyrender" }
+blitz-dom = { workspace = true, features = ["svg", "floats", "system_fonts", "woff-rust"] }
+blitz-html = {workspace = true }
+blitz-traits = { workspace = true }
+blitz-paint = { workspace = true, features = ["default"] }
+anyrender = { workspace = true }
+anyrender_vello = { workspace = true, optional = true }
+anyrender_vello_cpu = { workspace = true, optional = true }
+
 taffy = { workspace = true }
 parley = { workspace = true }
-image = { workspace = true }
+image = { workspace = true, features = ["png"] }
 url = { workspace = true }
 data-url = { workspace = true }
 png = { version = "0.17" }
@@ -29,8 +33,8 @@ env_logger = { version = "0.11.5" }
 owo-colors = "4.1.0"
 log = "0.4.22"
 regex = "1.11.1"
-rayon = "1.10.0"
-thread_local = "1.1.8"
+rayon = { workspace = true }
+thread_local = { workspace = true }
 bitflags = "2.6.0"
 pollster = "0.4.0"
 atomic_float = "1"

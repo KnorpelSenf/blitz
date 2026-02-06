@@ -1,16 +1,20 @@
 [package]
 name = "stylo_taffy"
-version = "0.1.0-alpha.3"
 license = "MIT OR Apache-2.0 OR MPL-2.0"
 description = "Interop crate for the stylo and taffy crates"
 keywords = ["css", "layout"]
-categories = ["gui"]
-edition = "2024"
-repository = "https://github.com/dioxuslabs/blitz"
+version.workspace = true
+homepage.workspace = true
+repository.workspace = true
+categories.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
 
 [dependencies]
 taffy = { workspace = true }
 style = { workspace = true }
+style_atoms = { workspace = true }
 
 [features]
 default = ["std", "block", "flexbox", "grid"]
@@ -18,3 +22,4 @@ std = ["taffy/std"]
 block = ["taffy/block_layout"]
 flexbox = ["taffy/flexbox"]
 grid = ["taffy/grid"]
+floats = ["taffy/float_layout"]
